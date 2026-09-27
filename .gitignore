@@ -1,0 +1,24 @@
+# Zig 构建产物
+.zig-cache/
+zig-out/
+*.o
+*.obj
+*.lib
+
+# 编译出的引擎二进制(build-exe 输出,不入库)
+aether3
+4ku
+
+# Python
+__pycache__/
+*.py[cod]
+
+# IDE / 编辑器
+.vscode/
+.idea/
+*.swp
+*~
+
+# 操作系统
+.DS_Store
+Thumbs.db
