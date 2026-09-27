@@ -141,6 +141,14 @@ const Reader = struct {
         self.pending_len = n;
     }
 
+    /// True when the current input line has been fully consumed (UCI is a
+    /// line protocol — senders write whole commands per write()).
+    fn atLineEnd(self: *Reader) bool {
+        var i = self.start;
+        while (i < self.end and (self.buf[i] == ' ' or self.buf[i] == '\t' or self.buf[i] == '\r')) i += 1;
+        return i < self.end and self.buf[i] == '\n';
+    }
+
     fn refill(self: *Reader) bool {
         const rem = self.end - self.start;
         std.mem.copyForwards(u8, self.buf[0..rem], self.buf[self.start..self.end]);
@@ -234,7 +242,8 @@ pub fn run() void {
             var depth_lim: i32 = 0;
             var nodes_lim: u64 = 0;
             var infinite = false;
-            while (reader.next()) |w| {
+            while (!reader.atLineEnd()) {
+                const w = reader.next() orelse break;
                 if (std.mem.eql(u8, w, "wtime")) {
                     wtime = reader.nextInt(i64) orelse 0;
                 } else if (std.mem.eql(u8, w, "btime")) {
@@ -258,6 +267,8 @@ pub fn run() void {
                     reader.unread(w);
                     break;
                 }
+                if (reader.atLineEnd())
+                    break;
             }
 
             const start = now();
