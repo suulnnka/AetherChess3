@@ -100,8 +100,15 @@ const Reader = struct {
     buf: [1 << 16]u8 = undefined,
     start: usize = 0,
     end: usize = 0,
+    pending_buf: [32]u8 = undefined,
+    pending_len: usize = 0,
 
     fn next(self: *Reader) ?[]const u8 {
+        if (self.pending_len > 0) {
+            const s = self.pending_buf[0..self.pending_len];
+            self.pending_len = 0;
+            return s;
+        }
         while (true) {
             var i = self.start;
             while (i < self.end and std.ascii.isWhitespace(self.buf[i])) i += 1;
@@ -125,6 +132,13 @@ const Reader = struct {
             self.start = j;
             return tok;
         }
+    }
+
+    /// Push one already-read token back (copied; UCI command words are short).
+    fn unread(self: *Reader, tok: []const u8) void {
+        const n = @min(tok.len, self.pending_buf.len);
+        @memcpy(self.pending_buf[0..n], tok[0..n]);
+        self.pending_len = n;
     }
 
     fn refill(self: *Reader) bool {
@@ -239,6 +253,10 @@ pub fn run() void {
                     infinite = true;
                 } else if (std.mem.eql(u8, w, "movestogo")) {
                     _ = reader.nextInt(i32);
+                } else {
+                    // Not a go parameter: the next command — push it back
+                    reader.unread(w);
+                    break;
                 }
             }
 
