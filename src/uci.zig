@@ -284,11 +284,13 @@ pub fn run() void {
                 hard = movetime;
             } else if (!infinite and depth_lim == 0 and nodes_lim == 0) {
                 const t = if (pos.stm == 1) btime else wtime;
-                const inc = if (pos.stm == 1) binc else winc;
                 if (t > 0) {
+                    // 4ku clock scheme: allocated = time/3 is both the hard
+                    // stop and the soft-ladder base (the /20+inc optimum was
+                    // gated at -58±45 vs the old scheme and reverted)
                     soft = true;
-                    optimum = @intCast(@max(1, @divTrunc(t, 20) + @divTrunc(inc * 3, 4)));
-                    hard = @max(1, @min(@divTrunc(t, 6), t - 30));
+                    optimum = @intCast(@max(1, @divTrunc(t, 3)));
+                    hard = optimum;
                 }
             }
             search.limits = .{ .depth = depth_lim, .nodes = nodes_lim, .soft = soft };
