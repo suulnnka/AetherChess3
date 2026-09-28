@@ -326,8 +326,15 @@ fn alphabeta(
             return 0;
         if (nodes.* -% time_check_nodes >= 2048) {
             time_check_nodes = nodes.*;
-            if (now() >= hard_stop)
+            if (now() >= hard_stop) {
+                // Sticky: a plain return would unwind one ply at a time
+                // (the global time_check_nodes resets the 2048 budget for
+                // every ancestor), and each ancestor would re-descend into
+                // fresh subtrees — an abort multiplied by the branching
+                // factor per ply. stopped short-circuits every move loop.
+                stopped = true;
                 return 0;
+            }
         }
 
         if (score > best_score)
