@@ -318,10 +318,13 @@ fn alphabeta(
         board.unmake(pos, move, undo);
 
         // Exit early if out of time or node limit hit. The node limit is
-        // exact (checked every move); the wall clock only every 2048 nodes.
+        // exact (checked every move); the wall clock every 2048 nodes at
+        // ANY depth — qsearch blossoms (mutual-check chains through the
+        // check extension) otherwise never see the deadline and can burn
+        // minutes of wall clock on a 200ms move.
         if (stopped)
             return 0;
-        if (depth > 4 and nodes.* -% time_check_nodes >= 2048) {
+        if (nodes.* -% time_check_nodes >= 2048) {
             time_check_nodes = nodes.*;
             if (now() >= hard_stop)
                 return 0;
@@ -435,6 +438,15 @@ fn printPv(pos: *Position, move: Move, hash_history: *HistList) void {
 // ---------------------------------------------------------------------------
 // Iterative deepening (main.cpp:923-1002)
 // ---------------------------------------------------------------------------
+// Emergency legal move: an aborted first iteration (time hit during a
+// qsearch blossom) can leave the root move unset (no_move) — never send
+// that to the GUI; fall back to movegen's first legal move.
+fn anyLegalMove(pos: *Position) Move {
+    var moves: [256]Move = undefined;
+    const n = movegen(pos, &moves, false);
+    return if (n > 0) moves[0] else no_move;
+}
+
 pub fn iterativelyDeepen(
     pos: *Position,
     hash_history: *HistList,
@@ -473,7 +485,7 @@ pub fn iterativelyDeepen(
 
             // Hard time / node limit exceeded
             if (stopped or now() >= hard_stop)
-                return stack[0].move;
+                return if (moveEq(stack[0].move, no_move)) anyLegalMove(pos) else stack[0].move;
 
             // Print with every iteration normally, or when the target depth
             // has finished when benchmarking
@@ -508,7 +520,7 @@ pub fn iterativelyDeepen(
             // OpenBench compliance
             if (bench_depth > 0 and i >= bench_depth and alpha < score and score < beta) {
                 total_nodes.* += nodes;
-                return stack[0].move;
+                return if (moveEq(stack[0].move, no_move)) anyLegalMove(pos) else stack[0].move;
             }
 
             if (score > alpha and score < beta)
@@ -530,5 +542,5 @@ pub fn iterativelyDeepen(
                 break :depth_loop;
         }
     }
-    return stack[0].move;
+    return if (moveEq(stack[0].move, no_move)) anyLegalMove(pos) else stack[0].move;
 }

@@ -42,7 +42,9 @@ pub fn appendMoveStr(move: Move) void {
     line_buf[line_len + 2] = 'a' + move.to % 8;
     line_buf[line_len + 3] = '1' + move.to / 8;
     line_len += 4;
-    if (move.promo != None) {
+    // promo==Pawn (0) is no_move's encoding — never a real promotion, and
+    // indexing "nbrq"[0-1] would underflow (this is how "a1a1r" was born)
+    if (move.promo != None and move.promo > types.Pawn) {
         const promos = "nbrq";
         line_buf[line_len] = promos[move.promo - @as(u8, Knight)];
         line_len += 1;
