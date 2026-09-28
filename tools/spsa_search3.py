@@ -89,6 +89,8 @@ def main():
     ap.add_argument('--seed', type=int, default=4242)
     ap.add_argument('--a-common', type=float, default=60.0)
     ap.add_argument('--k-decay', type=float, default=25.0)
+    ap.add_argument('--hash', type=int, default=0,
+                    help='per-engine Hash MB via setoption (0 = engine default)')
     args = ap.parse_args()
 
     workdir = os.path.dirname(os.path.abspath(args.state))
@@ -124,7 +126,9 @@ def main():
             w, l, d, _, _ = M.run_pairing(
                 cmd_p, 'plus', cmd_m, 'minus', 2 * args.pairs, (5000, 50),
                 args.workers, args.seed * 1_000_003 + k, pairs_csv,
-                movetime=args.movetime)
+                movetime=args.movetime,
+                a_opts=({'Hash': args.hash} if args.hash else None),
+                b_opts=({'Hash': args.hash} if args.hash else None))
             n = w + l + d
             yp = (w + 0.5 * d) / n
             dy = yp - (1.0 - yp)
