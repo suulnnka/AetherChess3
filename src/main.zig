@@ -9,9 +9,14 @@
 const std = @import("std");
 const board = @import("board.zig");
 const nnue = @import("nnue.zig");
+const tun = @import("tunables.zig");
 const uci = @import("uci.zig");
 
 pub fn main(init: std.process.Init.Minimal) !void {
+    // Tuned search constants from A3_SEARCH_PARAMS (SPSA hook) — before
+    // anything else so bench/search/uci all see the same values
+    tun.init(init.environ);
+
     // Generate used attack masks and Zobrist keys, load the NNUE net
     board.init();
     nnue.init();

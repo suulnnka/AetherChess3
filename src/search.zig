@@ -10,6 +10,7 @@ const board = @import("board.zig");
 const nnue = @import("nnue.zig");
 const tt = @import("tt.zig");
 const out = @import("out.zig");
+const tun = @import("tunables.zig");
 
 const Position = types.Position;
 const Move = types.Move;
@@ -190,11 +191,11 @@ fn alphabeta(
 
     if (ply > 0 and !in_qsearch and !in_check and alpha == beta - 1) {
         // Reverse futility pruning
-        if (depth < 8) {
-            if (static_eval - 71 * (depth - @as(i32, @intFromBool(improving))) >= beta)
+        if (depth < tun.get(.rfp_max_depth)) {
+            if (static_eval - tun.get(.rfp_margin) * (depth - @as(i32, @intFromBool(improving))) >= beta)
                 return static_eval;
 
-            in_qsearch = static_eval + 238 * depth < alpha;
+            in_qsearch = static_eval + tun.get(.razoring) * depth < alpha;
         }
 
         // Null move pruning (in-place null: stm flip + ep clear; pieces and
@@ -212,7 +213,7 @@ fn alphabeta(
             pos.hash ^= 1;
             pos.halfmove += 1;
             @memcpy(&accs[@as(usize, @intCast(ply)) + 1], &accs[@intCast(ply)]);
-            const null_depth = depth - 4 - @divTrunc(depth, 5) - @min(@divTrunc(static_eval - beta, 196), 3);
+            const null_depth = depth - tun.get(.nmp_base) - @divTrunc(depth, tun.get(.nmp_div)) - @min(@divTrunc(static_eval - beta, tun.get(.nmp_eval_div)), tun.get(.nmp_cap));
             const v = -alphabeta(pos, accs, -beta, -alpha, null_depth, ply + 1, nodes, stack, hash_history, hh_table, false);
             pos.ep = saved_ep;
             pos.hash = saved_hash;
@@ -272,12 +273,12 @@ fn alphabeta(
         const gain = max_material[move.promo] + max_material[@intCast(pieceOn(pos, move.to))];
 
         // Delta pruning
-        if (in_qsearch and !in_check and static_eval + 50 + gain < alpha)
+        if (in_qsearch and !in_check and static_eval + tun.get(.qs_delta) + gain < alpha)
             break :loop;
 
         // Forward futility pruning
-        if (ply > 0 and depth < 8 and !in_qsearch and !in_check and num_moves_evaluated != 0 and
-            static_eval + 105 * depth + gain < alpha)
+        if (ply > 0 and depth < tun.get(.ffp_max_depth) and !in_qsearch and !in_check and num_moves_evaluated != 0 and
+            static_eval + tun.get(.ffp_margin) * depth + gain < alpha)
             break :loop;
 
         // Make the move on the board in place; keep the accumulator of the
@@ -300,7 +301,7 @@ fn alphabeta(
         if (depth > 3 and num_moves_evaluated > 1) {
             const hist = @divTrunc(hh_table[stm][@intFromBool(gain == 0)][move.from][move.to], 128);
             const clamped = @min(@max(hist, -2), 2);
-            reduction = @max(@divTrunc(num_moves_evaluated, 13) + @divTrunc(depth, 14) +
+            reduction = @max(@divTrunc(num_moves_evaluated, tun.get(.lmr_move_div)) + @divTrunc(depth, tun.get(.lmr_depth_div)) +
                 @as(i32, @intFromBool(alpha == beta - 1)) + @as(i32, @intFromBool(!improving)) - clamped, 0);
         }
 
@@ -345,12 +346,12 @@ fn alphabeta(
                 }
 
                 const hidx = [2]usize{ stm, @intFromBool(gain == 0) };
-                hh_table[hidx[0]][hidx[1]][move.from][move.to] +%= depth *% depth -% @divTrunc(depth *% depth *% hh_table[hidx[0]][hidx[1]][move.from][move.to], 512);
+                hh_table[hidx[0]][hidx[1]][move.from][move.to] +%= depth *% depth -% @divTrunc(depth *% depth *% hh_table[hidx[0]][hidx[1]][move.from][move.to], tun.get(.hist_gravity));
                 var j3: i32 = 0;
                 while (j3 < num_moves_evaluated) : (j3 += 1) {
                     const prev_gain = max_material[moves_evaluated[@intCast(j3)].promo] + max_material[@intCast(pieceOn(pos, moves_evaluated[@intCast(j3)].to))];
                     const pidx = [2]usize{ stm, @intFromBool(prev_gain == 0) };
-                    hh_table[pidx[0]][pidx[1]][moves_evaluated[@intCast(j3)].from][moves_evaluated[@intCast(j3)].to] -%= depth *% depth +% @divTrunc(depth *% depth *% hh_table[pidx[0]][pidx[1]][moves_evaluated[@intCast(j3)].from][moves_evaluated[@intCast(j3)].to], 512);
+                    hh_table[pidx[0]][pidx[1]][moves_evaluated[@intCast(j3)].from][moves_evaluated[@intCast(j3)].to] -%= depth *% depth +% @divTrunc(depth *% depth *% hh_table[pidx[0]][pidx[1]][moves_evaluated[@intCast(j3)].from][moves_evaluated[@intCast(j3)].to], tun.get(.hist_gravity));
                 }
                 break :loop;
             }
@@ -362,7 +363,7 @@ fn alphabeta(
             num_quiets_evaluated += 1;
 
         // Late move pruning based on quiet move count
-        if (!in_check and alpha == beta - 1 and num_quiets_evaluated > ((1 + depth * depth) >> @intCast(@intFromBool(!improving))))
+        if (!in_check and alpha == beta - 1 and num_quiets_evaluated > ((tun.get(.lmp_base) + depth * depth) >> @intCast(@intFromBool(!improving))))
             break :loop;
     }
 
@@ -463,7 +464,7 @@ pub fn iterativelyDeepen(
         if (nodes >= stop_nodes)
             break;
         var research: i32 = 0;
-        var window: i32 = 28 + ((score * score) >> 14);
+        var window: i32 = tun.get(.asp_base) + ((score * score) >> 14);
         while (true) {
             research += 1;
             const alpha = score -% window;
