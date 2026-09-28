@@ -40,6 +40,7 @@ pub const Position = struct {
     },
     ep: u64 = 0, // absolute en-passant target square bit
     stm: u8 = 0, // side to move: 0 White, 1 Black
+    halfmove: u16 = 0, // plies since last pawn move / capture (50-move rule)
     king_sq: [2]u8 = .{ 4, 60 },
     board: [64]u8 = [_]u8{0xFF} ** 64, // mailbox: piece id (color*6+type), 0xFF empty
     hash: u64 = 0, // incremental Zobrist hash (maintained by make/unmake)

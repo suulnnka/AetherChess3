@@ -359,6 +359,11 @@ pub fn run() void {
             appendInt(pos.hash);
             append("\n");
             flushLine();
+        } else if (std.mem.eql(u8, word, "dhm")) {
+            // Debug extension: halfmove clock, for differential verification.
+            appendInt(pos.halfmove);
+            append("\n");
+            flushLine();
         } else if (std.mem.eql(u8, word, "deval")) {
             // Debug extension: not present in 4ku; used for port verification only.
             appendInt(evalFresh(&pos));

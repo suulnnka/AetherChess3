@@ -156,6 +156,7 @@ pub const Undo = struct {
     ep: u64,
     castling: u8, // packed [0]..[3] bits
     hash: u64,
+    halfmove: u16,
 };
 
 inline fn mirrorFlagsB(pos: *const Position) [2]bool {
@@ -218,6 +219,7 @@ pub inline fn make(pos: *Position, info: MoveInfo, move: Move) Undo {
         .ep = old_ep,
         .castling = @intCast(pos.castling[0] | pos.castling[1] << 1 | pos.castling[2] << 2 | pos.castling[3] << 3),
         .hash = pos.hash,
+        .halfmove = pos.halfmove,
     };
 
     // Move the piece
@@ -280,6 +282,9 @@ pub inline fn make(pos: *Position, info: MoveInfo, move: Move) Undo {
     pos.castling[3] &= @intFromBool(mask & 0x1100000000000000 == 0);
 
     pos.stm = @intCast(them);
+
+    // 50-move clock: reset on any pawn move or capture (EP included), +1 else
+    pos.halfmove = if (piece == Pawn or info.victim_ty != None) 0 else pos.halfmove + 1;
 
     // Incremental Zobrist update (piece move, victim, castling rook,
     // ep square change, castling-rights change, stm)
@@ -354,6 +359,7 @@ pub inline fn unmake(pos: *Position, move: Move, undo: Undo) void {
 
     pos.stm = @intCast(us);
     pos.ep = undo.ep;
+    pos.halfmove = undo.halfmove;
     pos.castling = .{
         undo.castling & 1,
         (undo.castling >> 1) & 1,
@@ -707,6 +713,7 @@ pub fn setFen(pos: *Position, fen: []const u8) void {
     pos.castling = .{ 0, 0, 0, 0 };
     pos.ep = 0;
     pos.stm = 0;
+    pos.halfmove = 0;
 
     var it = std.mem.tokenizeAny(u8, fen, " \t");
     const board = it.next() orelse return;
@@ -748,6 +755,13 @@ pub fn setFen(pos: *Position, fen: []const u8) void {
             const sq = @as(i32, ep_tok[0] - 'a') + 8 * @as(i32, ep_tok[1] - '1');
             pos.ep = @as(u64, 1) << @intCast(sq);
         }
+    }
+
+    // Halfmove clock (FEN field 5; the fullmove number after it is ignored)
+    if (it.next()) |hm_tok| {
+        if (std.fmt.parseInt(u16, hm_tok, 10)) |hm| {
+            pos.halfmove = hm;
+        } else |_| {}
     }
 
     setupPosition(pos);

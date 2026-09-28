@@ -142,8 +142,17 @@ fn alphabeta(
     const tt_key = pos.hash;
 
     if (ply > 0 and !in_qsearch) {
-        // Repetition detection
-        for (hash_history.items[0..hash_history.len]) |old_hash| {
+        // 50-move rule: once 100 halfmoves pile up the side to move could
+        // claim a draw. In-check nodes still search so a mate delivered on
+        // the 100th halfmove is found.
+        if (pos.halfmove >= 100 and !in_check)
+            return 0;
+
+        // Repetition detection, bounded by the halfmove clock: keys older
+        // than the last irreversible move (pawn move / capture) describe a
+        // different placement and can never match again.
+        const bound: usize = @min(hash_history.len, pos.halfmove);
+        for (hash_history.items[hash_history.len - bound .. hash_history.len]) |old_hash| {
             if (old_hash == tt_key)
                 return 0;
         }
@@ -195,16 +204,19 @@ fn alphabeta(
         {
             const saved_ep = pos.ep;
             const saved_hash = pos.hash;
+            const saved_halfmove = pos.halfmove;
             if (pos.ep != 0)
                 pos.hash ^= board.keys[768 + @as(usize, @intCast(@ctz(pos.ep)))];
             pos.ep = 0;
             pos.stm ^= 1;
             pos.hash ^= 1;
+            pos.halfmove += 1;
             @memcpy(&accs[@as(usize, @intCast(ply)) + 1], &accs[@intCast(ply)]);
             const null_depth = depth - 4 - @divTrunc(depth, 5) - @min(@divTrunc(static_eval - beta, 196), 3);
             const v = -alphabeta(pos, accs, -beta, -alpha, null_depth, ply + 1, nodes, stack, hash_history, hh_table, false);
             pos.ep = saved_ep;
             pos.hash = saved_hash;
+            pos.halfmove = saved_halfmove;
             pos.stm ^= 1;
             if (v >= beta)
                 return beta;
