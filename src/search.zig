@@ -44,6 +44,9 @@ pub var limits: Limits = .{};
 pub var hard_stop: u64 = 0; // absolute wall-clock ms; alphabeta aborts past it
 var stop_nodes: u64 = std.math.maxInt(u64);
 var stopped = false;
+// Node count at the last wall-clock probe: clock_gettime costs ~25ns, more
+// than a make/unmake pair, so the time limit is only sampled every 2048 nodes.
+var time_check_nodes: u64 = 0;
 
 // Countermove table: [stm][prev from][prev to] -> refutation move.
 // Persisted across searches like the history table; cleared on ucinewgame.
@@ -301,9 +304,14 @@ fn alphabeta(
 
         board.unmake(pos, move, undo);
 
-        // Exit early if out of time or node limit hit
-        if (stopped or (depth > 4 and now() >= hard_stop)) {
+        // Exit early if out of time or node limit hit. The node limit is
+        // exact (checked every move); the wall clock only every 2048 nodes.
+        if (stopped)
             return 0;
+        if (depth > 4 and nodes.* -% time_check_nodes >= 2048) {
+            time_check_nodes = nodes.*;
+            if (now() >= hard_stop)
+                return 0;
         }
 
         if (score > best_score)
@@ -428,6 +436,7 @@ pub fn iterativelyDeepen(
     nnue.refreshAcc(pos, &accs[0]);
     var nodes: u64 = 0;
     stopped = false;
+    time_check_nodes = 0;
     stop_nodes = if (limits.nodes > 0) limits.nodes else std.math.maxInt(u64);
     // Stability-scaled soft budget: an iteration that changes the best move
     // buys more time (x1.5 per change, cumulative) within the hard budget.
