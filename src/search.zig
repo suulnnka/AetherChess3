@@ -307,9 +307,11 @@ fn alphabeta(
         if (in_qsearch and !in_check and static_eval + tun.get(.qs_delta) + gain < alpha)
             break :loop;
 
-        // SEE pruning of hanging quiets (main search)
+        // SEE pruning of hanging quiets (main search) — quadratic capped at
+        // depth 12 so the threshold keeps firing in long-timecontrol searches
+        // (uncapped it starves: -4600 at depth 16 but -12000 at depth 26)
         if (ply > 0 and !in_qsearch and !in_check and gain == 0 and move.promo == types.None and
-            see.see(pos, move) < -18 * depth * depth)
+            see.see(pos, move) < -18 * @min(depth, 12) * @min(depth, 12))
             continue;
 
         // Forward futility pruning
@@ -358,9 +360,10 @@ fn alphabeta(
                 }
             } else if (gain == 0 and ply > 0 and move.promo == types.None) {
                 const ch = cont_table[stack[@intCast(ply - 1)].current_pt][stack[@intCast(ply - 1)].current.to][move.to];
-                if (ch < -800) {
+                // thresholds inside the table's +/-512 dynamic range
+                if (ch < -256) {
                     reduction += 1;
-                } else if (ch > 800) {
+                } else if (ch > 256) {
                     reduction = @max(reduction - 1, 0);
                 }
             }
