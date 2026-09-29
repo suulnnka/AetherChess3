@@ -11,6 +11,7 @@ const nnue = @import("nnue.zig");
 const tt = @import("tt.zig");
 const out = @import("out.zig");
 const tun = @import("tunables.zig");
+const see = @import("see.zig");
 
 const Position = types.Position;
 const Move = types.Move;
@@ -288,9 +289,21 @@ fn alphabeta(
         // Material gain
         const gain = max_material[move.promo] + max_material[@intCast(pieceOn(pos, move.to))];
 
+        // SEE pruning of losing captures in qsearch (promotions and
+        // victim>=attacker swaps exempt — SEE >= 0 by the first exchange)
+        if (in_qsearch and !in_check and move.promo == types.None and pos.board[move.to] != 0xFF and
+            see.piece_val[types.idType(pos.board[move.to])] < see.piece_val[types.idType(pos.board[move.from])] and
+            see.see(pos, move) < 0)
+            continue;
+
         // Delta pruning
         if (in_qsearch and !in_check and static_eval + tun.get(.qs_delta) + gain < alpha)
             break :loop;
+
+        // SEE pruning of hanging quiets (main search)
+        if (ply > 0 and !in_qsearch and !in_check and gain == 0 and move.promo == types.None and
+            see.see(pos, move) < -18 * depth * depth)
+            continue;
 
         // Forward futility pruning
         if (ply > 0 and depth < tun.get(.ffp_max_depth) and !in_qsearch and !in_check and num_moves_evaluated != 0 and
@@ -320,6 +333,25 @@ fn alphabeta(
             const clamped = @min(@max(hist, -2), 2);
             reduction = @max(@divTrunc(num_moves_evaluated, tun.get(.lmr_move_div)) + @divTrunc(depth, tun.get(.lmr_depth_div)) +
                 @as(i32, @intFromBool(alpha == beta - 1)) + @as(i32, @intFromBool(!improving)) - clamped, 0);
+            // Combo conditions: winning captures (first exchange not losing)
+            // search nearer full depth; losing captures and bad-continuation
+            // quiets get one extra reduction.
+            if (gain != 0 and move.promo == types.None) {
+                const victim = see.piece_val[types.idType(pos.board[move.to])];
+                const attacker = see.piece_val[types.idType(pos.board[move.from])];
+                if (victim >= attacker or see.see(pos, move) > 0) {
+                    reduction = @max(reduction - 1, 0);
+                } else if (see.see(pos, move) < 0) {
+                    reduction += 1;
+                }
+            } else if (gain == 0 and ply > 0 and move.promo == types.None) {
+                const ch = cont_table[stack[@intCast(ply - 1)].current_pt][stack[@intCast(ply - 1)].current.to][move.to];
+                if (ch < -800) {
+                    reduction += 1;
+                } else if (ch > 800) {
+                    reduction = @max(reduction - 1, 0);
+                }
+            }
         }
 
         while (num_moves_evaluated != 0) {
