@@ -111,6 +111,12 @@ const Accs = [MAX_PLY + 2]nnue.Acc;
 // ---------------------------------------------------------------------------
 // Search (main.cpp:628-877)
 // ---------------------------------------------------------------------------
+// Distinct TT key contribution for the excluded move of a singular
+// verification search (any bijective-enough mix; not a Zobrist table).
+inline fn exclHash(m: Move) u64 {
+    return (@as(u64, m.from) << 6 | m.to) *% 0x9E3779B97F4A7C15 +% @as(u64, m.promo) *% 0xD1B54A32D192ED03;
+}
+
 fn alphabeta(
     pos: *Position,
     accs: *Accs,
@@ -123,6 +129,7 @@ fn alphabeta(
     hash_history: *HistList,
     hh_table: *[2][2][64][64]i32,
     do_null: bool,
+    excluded: Move,
 ) i32 {
     var alpha = alpha_in;
     var beta = beta_in;
@@ -147,7 +154,7 @@ fn alphabeta(
     depth += @intFromBool(in_check);
 
     var in_qsearch = depth <= 0;
-    const tt_key = pos.hash;
+    const tt_key = if (moveEq(excluded, no_move)) pos.hash else pos.hash ^ exclHash(excluded);
 
     if (ply > 0 and !in_qsearch) {
         // 50-move rule: once 100 halfmoves pile up the side to move could
@@ -166,8 +173,8 @@ fn alphabeta(
         }
     }
 
-    // TT Probing
-    const tt_entry = &tt.transposition_table[@intCast(tt_key % tt.num_tt_entries)];
+    // TT Probing (two-tier bucket)
+    const tt_entry = tt.probe(tt_key) orelse &tt.no_entry;
     var tt_move = no_move;
     if (tt_entry.key == tt_key) {
         tt_move = tt_entry.move;
@@ -225,7 +232,7 @@ fn alphabeta(
             stack[@intCast(ply)].current = no_move;
             stack[@intCast(ply)].current_pt = 12;
             const null_depth = depth - tun.get(.nmp_base) - @divTrunc(depth, tun.get(.nmp_div)) - @min(@divTrunc(static_eval - beta, tun.get(.nmp_eval_div)), tun.get(.nmp_cap));
-            const v = -alphabeta(pos, accs, -beta, -alpha, null_depth, ply + 1, nodes, stack, hash_history, hh_table, false);
+            const v = -alphabeta(pos, accs, -beta, -alpha, null_depth, ply + 1, nodes, stack, hash_history, hh_table, false, no_move);
             pos.ep = saved_ep;
             pos.hash = saved_hash;
             pos.halfmove = saved_halfmove;
@@ -233,6 +240,26 @@ fn alphabeta(
             if (v >= beta)
                 return beta;
         }
+    }
+
+    // Singular extension: with a deep TT entry backing the ttMove, search
+    // all OTHER moves at reduced depth with beta = ttScore - depth. If they
+    // all fail low the ttMove is the only promising move — extend it by 1.
+    // Excluded-move key isolates the verification; no back-to-back ext.
+    var ext_se: i32 = 0;
+    stack[@intCast(ply)].se_ext = false;
+    const parent_ext = ply > 0 and stack[@intCast(ply - 1)].se_ext;
+    if (ply > 0 and !in_qsearch and alpha == beta - 1 and depth >= 6 and
+        !parent_ext and
+        tt_entry.key == tt_key and !moveEq(tt_move, no_move) and
+        (tt_entry.flag == types.Lower or tt_entry.flag == types.Exact) and
+        @as(i32, tt_entry.depth) >= depth - 3 and
+        tt_entry.score > -@as(i16, 100) - mate_score and tt_entry.score < @as(i16, 100) + mate_score)
+    {
+        const beta_v = @as(i32, tt_entry.score) - depth;
+        const v = alphabeta(pos, accs, beta_v - 1, beta_v, @divTrunc(depth - 1, 2), ply, nodes, stack, hash_history, hh_table, false, tt_move);
+        if (v < beta_v)
+            ext_se = 1;
     }
 
     hash_history.push(tt_key);
@@ -293,6 +320,10 @@ fn alphabeta(
         moves[@intCast(best_move_index)] = moves[@intCast(i)];
         move_scores[@intCast(best_move_index)] = move_scores[@intCast(i)];
 
+        // singular verification root: the excluded move is the one under test
+        if (!moveEq(excluded, no_move) and moveEq(move, excluded))
+            continue;
+
         // Material gain
         const gain = max_material[move.promo] + max_material[@intCast(pieceOn(pos, move.to))];
 
@@ -337,6 +368,9 @@ fn alphabeta(
 
         var score: i32 = undefined;
         var reduction: i32 = 0;
+        const ext: i32 = @intFromBool(ext_se != 0 and moveEq(move, tt_move));
+        if (ext != 0)
+            stack[@intCast(ply)].se_ext = true;
         if (depth > 3 and num_moves_evaluated > 1) {
             const hist = @divTrunc(hh_table[stm][@intFromBool(gain == 0)][move.from][move.to], 128);
             const clamped = @min(@max(hist, -2), 2);
@@ -370,14 +404,14 @@ fn alphabeta(
         }
 
         while (num_moves_evaluated != 0) {
-            score = -alphabeta(pos, accs, -alpha - 1, -alpha, depth - reduction - 1, ply + 1, nodes, stack, hash_history, hh_table, true);
+            score = -alphabeta(pos, accs, -alpha - 1, -alpha, depth - reduction - 1 + ext, ply + 1, nodes, stack, hash_history, hh_table, true, no_move);
             if (!(score > alpha and reduction > 0))
                 break;
             reduction = 0;
         }
 
         if (num_moves_evaluated == 0 or (score > alpha and score < beta))
-            score = -alphabeta(pos, accs, -beta, -alpha, depth - 1, ply + 1, nodes, stack, hash_history, hh_table, true);
+            score = -alphabeta(pos, accs, -beta, -alpha, depth - 1 + ext, ply + 1, nodes, stack, hash_history, hh_table, true, no_move);
 
         board.unmake(pos, move, undo);
 
@@ -460,14 +494,8 @@ fn alphabeta(
     if (best_score == -inf)
         return if (in_check) ply - mate_score else 0;
 
-    // Save to TT
-    tt_entry.* = .{
-        .key = tt_key,
-        .move = best_move,
-        .flag = tt_flag,
-        .score = @truncate(best_score),
-        .depth = @truncate(@as(i32, @intFromBool(!in_qsearch)) * depth),
-    };
+    // Save to TT (two-tier; excluded-key nodes store under their own key)
+    tt.store(tt_key, best_move, tt_flag, best_score, @as(i32, @intFromBool(!in_qsearch)) * depth);
 
     return best_score;
 }
@@ -499,7 +527,7 @@ fn printPv(pos: *Position, move: Move, hash_history: *HistList) void {
 
     // Probe the TT in the resulting position
     const tt_key = pos.hash;
-    const tt_entry = &tt.transposition_table[@intCast(tt_key % tt.num_tt_entries)];
+    const tt_entry = tt.probe(tt_key) orelse &tt.no_entry;
 
     // Only continue if the move was valid and comes from a PV search
     if (tt_entry.key != tt_key or moveEq(tt_entry.move, no_move) or tt_entry.flag != Exact) {
@@ -567,7 +595,7 @@ pub fn iterativelyDeepen(
             research += 1;
             const alpha = score -% window;
             const beta = score +% window;
-            score = alphabeta(pos, &accs, alpha, beta, i, 0, &nodes, &stack, hash_history, hh_table, true);
+            score = alphabeta(pos, &accs, alpha, beta, i, 0, &nodes, &stack, hash_history, hh_table, true, no_move);
 
             // Hard time / node limit exceeded
             if (stopped or now() >= hard_stop)
