@@ -73,6 +73,7 @@ pub const Stack = struct {
     move: Move = no_move,
     killer: Move = no_move,
     current: Move = no_move, // move currently being searched at this ply
+    current_pt: u8 = 0, // mover piece id (color*6+type) of `current` (conthist context)
     score: i32 = 0,
 };
 

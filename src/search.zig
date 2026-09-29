@@ -53,6 +53,12 @@ var time_check_nodes: u64 = 0;
 // Persisted across searches like the history table; cleared on ucinewgame.
 pub var cm_table = std.mem.zeroes([2][64][64]Move);
 
+// 1-ply continuation history (small table): quality of a quiet move's
+// destination given the previous move's piece and destination. Used for
+// quiet ordering only (v1); updated with the same depth^2 gravity shape as
+// the main history on cutoffs (bonus) and tried quiets (malus).
+pub var cont_table = std.mem.zeroes([13][64][64]i16); // [12] = neutral (null-move) context
+
 const append = out.append;
 const appendInt = out.appendInt;
 const appendMoveStr = out.appendMoveStr;
@@ -213,6 +219,10 @@ fn alphabeta(
             pos.hash ^= 1;
             pos.halfmove += 1;
             @memcpy(&accs[@as(usize, @intCast(ply)) + 1], &accs[@intCast(ply)]);
+            // neutral conthist context for the null child (row 12 is never
+            // read for ordering context except through this sentinel)
+            stack[@intCast(ply)].current = no_move;
+            stack[@intCast(ply)].current_pt = 12;
             const null_depth = depth - tun.get(.nmp_base) - @divTrunc(depth, tun.get(.nmp_div)) - @min(@divTrunc(static_eval - beta, tun.get(.nmp_eval_div)), tun.get(.nmp_cap));
             const v = -alphabeta(pos, accs, -beta, -alpha, null_depth, ply + 1, nodes, stack, hash_history, hh_table, false);
             pos.ep = saved_ep;
@@ -244,12 +254,18 @@ fn alphabeta(
         // Score moves at the first loop, except if we have a hash move,
         // then we'll use that first and delay sorting one iteration.
         if (i == @as(i32, @intFromBool(!moveEq(no_move, tt_move)))) {
+            // Conthist context: the move that led into this node (parent's
+            // current move and its mover). Fixed for the whole scoring pass.
+            const ch_on = ply > 0;
+            const ch_pt: usize = if (ch_on) stack[@intCast(ply - 1)].current_pt else 0;
+            const ch_to: u8 = if (ch_on) stack[@intCast(ply - 1)].current.to else 0;
             var j: i32 = 0;
             while (j < num_moves) : (j += 1) {
                 const gain = max_material[moves[@intCast(j)].promo] + max_material[@intCast(pieceOn(pos, moves[@intCast(j)].to))];
                 const cm_bonus = @intFromBool(gain == 0 and moveEq(moves[@intCast(j)], cm_table[stm][moves[@intCast(j)].from][moves[@intCast(j)].to]));
+                const ch = if (gain == 0 and ch_on) cont_table[ch_pt][ch_to][moves[@intCast(j)].to] else 0;
                 move_scores[@intCast(j)] = hh_table[stm][@intFromBool(gain == 0)][moves[@intCast(j)].from][moves[@intCast(j)].to] +
-                    @as(i32, @intFromBool(gain != 0 or moveEq(moves[@intCast(j)], stack[@intCast(ply)].killer))) * 2048 + @as(i32, cm_bonus) * 1024 + gain;
+                    @as(i32, @intFromBool(gain != 0 or moveEq(moves[@intCast(j)], stack[@intCast(ply)].killer))) * 2048 + @as(i32, cm_bonus) * 1024 + gain + ch;
             }
         }
 
@@ -285,6 +301,7 @@ fn alphabeta(
         // parent ply and write the child's from it plus the feature deltas.
         stack[@intCast(ply)].current = move;
         const minfo = board.prepareMove(pos, move);
+        stack[@intCast(ply)].current_pt = @intCast(minfo.us * 6 + minfo.piece);
         const undo = board.make(pos, minfo, move);
 
         nodes.* += 1;
@@ -353,6 +370,13 @@ fn alphabeta(
                 if (ply > 0) {
                     const prev = stack[@intCast(ply - 1)].current;
                     cm_table[stm][prev.from][prev.to] = move;
+                    if (gain == 0) {
+                        const ppt = stack[@intCast(ply - 1)].current_pt;
+                        const pto = prev.to;
+                        const v: i32 = cont_table[ppt][pto][move.to];
+                        const b: i32 = depth * depth;
+                        cont_table[ppt][pto][move.to] = @intCast(std.math.clamp(v + (b - @divTrunc(b * v, 512)), -16000, 16000));
+                    }
                 }
 
                 const hidx = [2]usize{ stm, @intFromBool(gain == 0) };
@@ -362,6 +386,14 @@ fn alphabeta(
                     const prev_gain = max_material[moves_evaluated[@intCast(j3)].promo] + max_material[@intCast(pieceOn(pos, moves_evaluated[@intCast(j3)].to))];
                     const pidx = [2]usize{ stm, @intFromBool(prev_gain == 0) };
                     hh_table[pidx[0]][pidx[1]][moves_evaluated[@intCast(j3)].from][moves_evaluated[@intCast(j3)].to] -%= depth *% depth +% @divTrunc(depth *% depth *% hh_table[pidx[0]][pidx[1]][moves_evaluated[@intCast(j3)].from][moves_evaluated[@intCast(j3)].to], tun.get(.hist_gravity));
+                    if (ply > 0 and prev_gain == 0) {
+                        const ppt = stack[@intCast(ply - 1)].current_pt;
+                        const pto = stack[@intCast(ply - 1)].current.to;
+                        const mv = moves_evaluated[@intCast(j3)];
+                        const v: i32 = cont_table[ppt][pto][mv.to];
+                        const b: i32 = depth * depth;
+                        cont_table[ppt][pto][mv.to] = @intCast(std.math.clamp(v - (b + @divTrunc(b * v, 512)), -16000, 16000));
+                    }
                 }
                 break :loop;
             }
