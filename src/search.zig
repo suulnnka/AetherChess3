@@ -350,6 +350,21 @@ fn alphabeta(
             static_eval + tun.get(.ffp_margin) * depth + gain < alpha)
             break :loop;
 
+        // Capture quality for the LMR condition, computed on the pre-move
+        // board: after make, board[to] holds the mover and board[from] is
+        // 0xFF (idType(0xFF) wraps to Rook). +1 winning (first exchange not
+        // losing or SEE > 0), -1 losing (SEE < 0), 0 unclassified. The gate
+        // mirrors the LMR block so see() is only called when it will be used.
+        var lmr_cap: i32 = 0;
+        if (depth > 3 and num_moves_evaluated > 1 and gain != 0 and move.promo == types.None) {
+            if (see.piece_val[types.idType(pos.board[move.to])] >= see.piece_val[types.idType(pos.board[move.from])]) {
+                lmr_cap = 1;
+            } else {
+                const s = see.see(pos, move);
+                lmr_cap = if (s > 0) 1 else if (s < 0) -1 else 0;
+            }
+        }
+
         // Make the move on the board in place; keep the accumulator of the
         // parent ply and write the child's from it plus the feature deltas.
         stack[@intCast(ply)].current = move;
@@ -378,19 +393,13 @@ fn alphabeta(
                 @as(i32, @intFromBool(alpha == beta - 1)) + @as(i32, @intFromBool(!improving)) - clamped, 0);
             // Combo conditions: winning captures (first exchange not losing)
             // search nearer full depth; losing captures and bad-continuation
-            // quiets get one extra reduction.
+            // quiets get one extra reduction. lmr_cap was classified on the
+            // pre-move board above (see comment there).
             if (gain != 0 and move.promo == types.None) {
-                const victim = see.piece_val[types.idType(pos.board[move.to])];
-                const attacker = see.piece_val[types.idType(pos.board[move.from])];
-                if (victim >= attacker) {
+                if (lmr_cap > 0) {
                     reduction = @max(reduction - tun.get2(.cond_mag), 0);
-                } else {
-                    const s = see.see(pos, move); // computed once
-                    if (s > 0) {
-                        reduction = @max(reduction - tun.get2(.cond_mag), 0);
-                    } else if (s < 0) {
-                        reduction += tun.get2(.cond_mag);
-                    }
+                } else if (lmr_cap < 0) {
+                    reduction += tun.get2(.cond_mag);
                 }
             } else if (gain == 0 and ply > 0 and move.promo == types.None) {
                 const ch = cont_table[stack[@intCast(ply - 1)].current_pt][stack[@intCast(ply - 1)].current.to][move.to];

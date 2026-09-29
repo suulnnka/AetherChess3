@@ -40,9 +40,11 @@ pub fn probe(key: u64) ?*TTEntry {
     return null;
 }
 
-/// Two-tier store: a new key or a depth >= the depth-tier entry promotes to
+/// Two-tier store: the same key or a depth >= the depth-tier entry takes
 /// slot [0] (demoting the old depth entry to the replace tier); a shallower
-/// re-store of a different position goes straight to the replace tier.
+/// store for a different position spills to the replace tier, so deep
+/// entries survive the churn of verification searches and iterative
+/// deepening.
 pub fn store(key: u64, move: Move, flag: u8, score: i32, depth: i32) void {
     const b = key % buckets();
     const d = &transposition_table[@intCast(b * 2)];
@@ -54,7 +56,7 @@ pub fn store(key: u64, move: Move, flag: u8, score: i32, depth: i32) void {
         .score = @truncate(score),
         .depth = @truncate(depth),
     };
-    if (d.key != key or depth >= d.depth) {
+    if (d.key == key or depth >= d.depth) {
         r.* = d.*;
         d.* = e;
     } else {

@@ -86,14 +86,24 @@ pub fn see(pos: *const Position, move: Move) i32 {
     var occ = (pos.colour[0] | pos.colour[1]) & ~bit(from);
     var gain: [32]i32 = undefined;
 
-    const victim0: usize = if (is_ep) Pawn else types.idType(pos.board[to]);
-    gain[0] = piece_val[victim0];
+    // Quiet moves (empty target) start the exchange at 0 — idType(0xFF)
+    // wraps to Rook, so the empty square must be handled explicitly.
+    gain[0] = if (is_ep)
+        piece_val[Pawn]
+    else if (pos.board[to] != 0xFF)
+        piece_val[types.idType(pos.board[to])]
+    else
+        0;
     if (move.promo != types.None)
         gain[0] += piece_val[move.promo] - piece_val[Pawn];
     var attacker_ty = from_ty;
     var side: usize = pos.stm ^ 1;
 
-    var attackers = attackersTo(pos, to, occ, 0) | attackersTo(pos, to, occ, 1);
+    // The initial attacker set must be masked by occ: the moving piece is
+    // gone from occ but still in the piece bitboards, and its from-square
+    // always attacks its own to-square (knight symmetry / slider ray), so
+    // without the mask it joins the exchange as a ghost recapturer.
+    var attackers = (attackersTo(pos, to, occ, 0) | attackersTo(pos, to, occ, 1)) & occ;
 
     var d: usize = 0;
     while (d < 31) {
