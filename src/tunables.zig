@@ -50,6 +50,38 @@ pub var val = blk: {
     break :blk v;
 };
 
+pub const Id2 = enum(usize) {
+    sq_coef, // SEE quiets: prune when see < -sq_coef * min(d, sq_cap)^2
+    sq_cap,
+    ch_thr, // conthist LMR threshold (table dynamic range is ~+/-512)
+    se_depth, // SE minimum depth
+    se_margin, // SE singular margin, x16 fixed point (16 = 1.0 x depth)
+    se_vdiv, // SE verification depth divisor: (d-1)/se_vdiv
+    mvv_scale, // MVV-LVA victim scale in ordering
+    cond_mag, // LMR condition adjustment magnitude
+};
+
+const defs2 = [_]Param{
+    .{ .name = "sq_coef", .def = 18, .lo = 6, .hi = 40 },
+    .{ .name = "sq_cap", .def = 12, .lo = 6, .hi = 20 },
+    .{ .name = "ch_thr", .def = 256, .lo = 64, .hi = 448 },
+    .{ .name = "se_depth", .def = 6, .lo = 4, .hi = 10 },
+    .{ .name = "se_margin", .def = 16, .lo = 4, .hi = 48 },
+    .{ .name = "se_vdiv", .def = 2, .lo = 2, .hi = 4 },
+    .{ .name = "mvv_scale", .def = 16, .lo = 8, .hi = 32 },
+    .{ .name = "cond_mag", .def = 1, .lo = 0, .hi = 2 },
+};
+
+pub var val2 = blk: {
+    var v: [defs2.len]i32 = undefined;
+    for (&v, &defs2) |*x, p| x.* = p.def;
+    break :blk v;
+};
+
+pub inline fn get2(id: Id2) i32 {
+    return val2[@intFromEnum(id)];
+}
+
 pub inline fn get(id: Id) i32 {
     return val[@intFromEnum(id)];
 }
@@ -65,9 +97,30 @@ pub fn init(environ: std.process.Environ) void {
         const eq = std.mem.indexOfScalar(u8, kv, '=') orelse continue;
         if (std.mem.eql(u8, kv[0..eq], "A3_SEARCH_PARAMS")) {
             parseSpec(kv[eq + 1 ..]);
+            continue;
+        }
+        if (std.mem.eql(u8, kv[0..eq], "A3_STACK_PARAMS")) {
+            parseSpec2(kv[eq + 1 ..]);
             return;
         }
     }
+}
+
+fn parseSpec2(spec: []const u8) void {
+    var it = std.mem.splitScalar(u8, spec, ',');
+    var parsed: [defs2.len]i32 = undefined;
+    var n: usize = 0;
+    while (it.next()) |tok| {
+        if (n >= defs2.len)
+            return;
+        const f = std.fmt.parseFloat(f64, std.mem.trim(u8, tok, " ")) catch return;
+        const lo: f64 = @floatFromInt(defs2[n].lo);
+        const hi: f64 = @floatFromInt(defs2[n].hi);
+        parsed[n] = @intFromFloat(@round(@min(@max(f, lo), hi)));
+        n += 1;
+    }
+    if (n == defs2.len)
+        val2 = parsed;
 }
 
 fn parseSpec(spec: []const u8) void {

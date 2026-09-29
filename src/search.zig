@@ -249,15 +249,15 @@ fn alphabeta(
     var ext_se: i32 = 0;
     stack[@intCast(ply)].se_ext = false;
     const parent_ext = ply > 0 and stack[@intCast(ply - 1)].se_ext;
-    if (ply > 0 and !in_qsearch and alpha == beta - 1 and depth >= 6 and
+    if (ply > 0 and !in_qsearch and alpha == beta - 1 and depth >= tun.get2(.se_depth) and
         !parent_ext and
         tt_entry.key == tt_key and !moveEq(tt_move, no_move) and
         (tt_entry.flag == types.Lower or tt_entry.flag == types.Exact) and
         @as(i32, tt_entry.depth) >= depth - 3 and
         tt_entry.score > -@as(i16, 100) - mate_score and tt_entry.score < @as(i16, 100) + mate_score)
     {
-        const beta_v = @as(i32, tt_entry.score) - depth;
-        const v = alphabeta(pos, accs, beta_v - 1, beta_v, @divTrunc(depth - 1, 2), ply, nodes, stack, hash_history, hh_table, false, tt_move);
+        const beta_v = @as(i32, tt_entry.score) - @divTrunc(tun.get2(.se_margin) * depth, 16);
+        const v = alphabeta(pos, accs, beta_v - 1, beta_v, @divTrunc(depth - 1, tun.get2(.se_vdiv)), ply, nodes, stack, hash_history, hh_table, false, tt_move);
         if (v < beta_v)
             ext_se = 1;
     }
@@ -296,7 +296,7 @@ fn alphabeta(
                 // decides order); with SEE-backed pruning/LMR the bad captures
                 // this drops below the killers are handled by their own channels
                 const order = if (gain != 0)
-                    gain * 16 - max_material[@intCast(pieceOn(pos, moves[@intCast(j)].from))]
+                    gain * tun.get2(.mvv_scale) - max_material[@intCast(pieceOn(pos, moves[@intCast(j)].from))]
                 else
                     0;
                 move_scores[@intCast(j)] = hh_table[stm][@intFromBool(gain == 0)][moves[@intCast(j)].from][moves[@intCast(j)].to] +
@@ -342,7 +342,7 @@ fn alphabeta(
         // depth 12 so the threshold keeps firing in long-timecontrol searches
         // (uncapped it starves: -4600 at depth 16 but -12000 at depth 26)
         if (ply > 0 and !in_qsearch and !in_check and gain == 0 and move.promo == types.None and
-            see.see(pos, move) < -18 * @min(depth, 12) * @min(depth, 12))
+            see.see(pos, move) < -tun.get2(.sq_coef) * @min(depth, tun.get2(.sq_cap)) * @min(depth, tun.get2(.sq_cap)))
             continue;
 
         // Forward futility pruning
@@ -383,22 +383,22 @@ fn alphabeta(
                 const victim = see.piece_val[types.idType(pos.board[move.to])];
                 const attacker = see.piece_val[types.idType(pos.board[move.from])];
                 if (victim >= attacker) {
-                    reduction = @max(reduction - 1, 0);
+                    reduction = @max(reduction - tun.get2(.cond_mag), 0);
                 } else {
                     const s = see.see(pos, move); // computed once
                     if (s > 0) {
-                        reduction = @max(reduction - 1, 0);
+                        reduction = @max(reduction - tun.get2(.cond_mag), 0);
                     } else if (s < 0) {
-                        reduction += 1;
+                        reduction += tun.get2(.cond_mag);
                     }
                 }
             } else if (gain == 0 and ply > 0 and move.promo == types.None) {
                 const ch = cont_table[stack[@intCast(ply - 1)].current_pt][stack[@intCast(ply - 1)].current.to][move.to];
                 // thresholds inside the table's +/-512 dynamic range
-                if (ch < -256) {
-                    reduction += 1;
-                } else if (ch > 256) {
-                    reduction = @max(reduction - 1, 0);
+                if (ch < -tun.get2(.ch_thr)) {
+                    reduction += tun.get2(.cond_mag);
+                } else if (ch > tun.get2(.ch_thr)) {
+                    reduction = @max(reduction - tun.get2(.cond_mag), 0);
                 }
             }
         }
