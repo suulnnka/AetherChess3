@@ -9,8 +9,13 @@ the same --state to continue from the last completed iteration, or raise
 
 Per iteration k: perturb all params +/-c_i, play 2*--pairs games
 (+arm vs -arm, colors paired) via AetherChess2's match.py, then
-    theta_i += a_k * (Y+ - Y-) / (2 c_i delta_i),  a_k = a0 / (1 + k/k_decay)
-with each step capped at +/-c_i and theta clamped to the param bounds.
+    theta_i += a_k * (Y+ - Y-) / (2 c_i delta_i)
+Fishtest-style per-param calibration (cf. sunfish tools/tune/spsa):
+    c_i = c_ratio * (hi_i - lo_i)          (floored at 1 for integer knobs)
+    a_i = r0 * (hi_i - lo_i) * 2 c_i       (initial step = r0 * range per unit signal)
+    a_k = a_i / (1 + k/K)^alpha,  K = iters/10, alpha = 0.602 (Spall)
+The +/-c_i step cap and theta clamping to bounds are safety rails only —
+a correct calibration should never hit the cap (it binds above |dy| ~ 75).
 
 Usage:
   spsa_search3.py --state st.json --iters 500 --chunk 20 --pairs 5 \
@@ -23,21 +28,23 @@ sys.path.insert(0, A2TOOLS)
 import match as M  # noqa: E402
 
 # (name, default, c_rel, lo, hi) — ORDER MUST MATCH src/tunables.zig defs2.
+# c_rel is historical (c is now c_ratio * range, built in main()); kept so the
+# table still documents the old relative scales.
 PARAMS = [
     ("sq_coef",    18, 0.12,   6,   40),
     ("sq_cap",     12, 0.15,   6,   20),
-    ("ch_thr",    256, 0.12,  64,  448),
-    ("se_depth",    6, 0.15,   4,   10),
-    ("se_margin",  16, 0.15,   4,   48),
+    ("se_depth",    7, 0.15,   4,   10),
+    ("se_margin",  32, 0.15,   4,   48),
     ("se_vdiv",     2, 0.25,   2,    4),
     ("mvv_scale",  16, 0.12,   8,   32),
-    ("cond_mag",    1, 0.40,   0,    2),
+    ("qs_fut_margin", 155, 0.12, 60, 350),
 ]
 NAMES = [p[0] for p in PARAMS]
 DEFS = [float(p[1]) for p in PARAMS]
-C = [max(1.0, p[2] * p[1]) for p in PARAMS]
 LO = [float(p[3]) for p in PARAMS]
 HI = [float(p[4]) for p in PARAMS]
+# c_i / a_i are built in main() from --c-ratio / --r0 (fishtest-style,
+# anchored to each param's range width, not its default value).
 
 
 def clamp(v, lo, hi):
@@ -80,14 +87,21 @@ def main():
     ap.add_argument('--movetime', type=int, default=200)
     ap.add_argument('--workers', type=int, default=12)
     ap.add_argument('--seed', type=int, default=4242)
-    ap.add_argument('--a-common', type=float, default=60.0)
-    ap.add_argument('--k-decay', type=float, default=25.0)
+    ap.add_argument('--c-ratio', type=float, default=0.15,
+                    help='perturbation c_i as fraction of (hi-lo), floored at 1')
+    ap.add_argument('--r0', type=float, default=0.002,
+                    help='initial step per unit signal as fraction of (hi-lo)')
+    ap.add_argument('--alpha', type=float, default=0.602,
+                    help='a_k = a_i / (1 + k/K)^alpha with K = iters/10 (Spall)')
     ap.add_argument('--hash', type=int, default=0,
                     help='per-engine Hash MB via setoption (0 = engine default)')
     args = ap.parse_args()
 
     workdir = os.path.dirname(os.path.abspath(args.state))
     os.makedirs(workdir, exist_ok=True)
+    C = [max(1.0, args.c_ratio * (h - l)) for l, h in zip(LO, HI)]
+    A = [args.r0 * (h - l) * 2.0 * c for l, h, c in zip(LO, HI, C)]
+    K = max(1.0, args.iters / 10.0)
     pairs_csv = os.path.join(workdir, 'pairs.csv')
     log = os.path.join(workdir, 'tune.log')
 
@@ -104,7 +118,11 @@ def main():
         return
 
     print(f'SPSA {len(PARAMS)} params, iters {k}->{args.iters}, '
-          f'pairs={args.pairs} movetime={args.movetime}ms workers={args.workers}', flush=True)
+          f'pairs={args.pairs} movetime={args.movetime}ms workers={args.workers} '
+          f'c_ratio={args.c_ratio} r0={args.r0} alpha={args.alpha} K={K:.0f}', flush=True)
+    for n_, l, h, c, a_ in zip(NAMES, LO, HI, C, A):
+        print(f'  {n_:>15s} range [{l:.0f},{h:.0f}] c={c:5.1f} '
+              f'unit-step@k0={a_ / (2.0 * c):6.3f}', flush=True)
     t0 = time.time()
     chunk_start, chunk_sig = k, []
     try:
@@ -126,15 +144,17 @@ def main():
             yp = (w + 0.5 * d) / n
             dy = yp - (1.0 - yp)
 
-            a_k = args.a_common / (1.0 + k / args.k_decay)
+            decay = (1.0 + k / K) ** args.alpha
             for i in range(len(PARAMS)):
-                step = a_k * dy / (2.0 * C[i] * deltas[i])
+                step = (A[i] / decay) * dy / (2.0 * C[i] * deltas[i])
                 theta[i] = clamp(theta[i] + clamp(step, -C[i], C[i]), LO[i], HI[i])
             k += 1
             chunk_sig.append(dy)
             save_state(args.state, k, theta,
                        {'seed': args.seed, 'movetime': args.movetime,
-                        'pairs': args.pairs, 'engine': args.engine})
+                        'pairs': args.pairs, 'engine': args.engine,
+                        'c_ratio': args.c_ratio, 'r0': args.r0,
+                        'alpha': args.alpha})
 
             if k % args.chunk == 0 or k == args.iters:
                 el = time.time() - t0

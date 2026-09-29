@@ -214,6 +214,7 @@ pub fn run() void {
         } else if (std.mem.eql(u8, word, "ucinewgame")) {
             hh_table = std.mem.zeroes([2][2][64][64]i32);
             search.cm_table = std.mem.zeroes([2][64][64]Move);
+            search.cont_table = std.mem.zeroes([13][64][64]i16);
             @memset(tt.transposition_table, TTEntry{});
         } else if (std.mem.eql(u8, word, "isready")) {
             append("readyok\n");

@@ -33,7 +33,11 @@ const pieceOn = board.pieceOn;
 // Search-side material heuristic for move ordering, delta/forward-futility
 // pruning and LMR gain classification (cp values, carried over from the 4ku
 // HCE table — independent of the NNUE evaluation itself).
-const max_material = [7]i32{ 147, 521, 521, 956, 1782, 0, 0 };
+// NOTE: a 2026-09-29 experiment rescaled this to the v7 net's remove-one-piece
+// average ({130,330,410,470,910}) and gated -69±25 over 200 games when the
+// dependent qs_delta/ffp margins were left at their old-table optima — the
+// margins absorb the scale, so a joint retune is required if ever retried.
+const max_material = &tun.mat;
 
 // Search limits and hard-stop state (single-threaded: module globals,
 // set by the UCI layer / bench before iterativelyDeepen).
@@ -254,7 +258,10 @@ fn alphabeta(
         tt_entry.key == tt_key and !moveEq(tt_move, no_move) and
         (tt_entry.flag == types.Lower or tt_entry.flag == types.Exact) and
         @as(i32, tt_entry.depth) >= depth - 3 and
-        tt_entry.score > -@as(i16, 100) - mate_score and tt_entry.score < @as(i16, 100) + mate_score)
+        // exclude mate scores: they live in |s| >= mate_score - 127, so the
+        // window must be mate_score - 200 (SF VALUE_KNOWN_WIN); a +100 bound
+        // lets every mate score through
+        tt_entry.score > @as(i32, 200) - mate_score and tt_entry.score < mate_score - 200)
     {
         const beta_v = @as(i32, tt_entry.score) - @divTrunc(tun.get2(.se_margin) * depth, 16);
         const v = alphabeta(pos, accs, beta_v - 1, beta_v, @divTrunc(depth - 1, tun.get2(.se_vdiv)), ply, nodes, stack, hash_history, hh_table, false, tt_move);
@@ -327,12 +334,22 @@ fn alphabeta(
         // Material gain
         const gain = max_material[move.promo] + max_material[@intCast(pieceOn(pos, move.to))];
 
-        // SEE pruning of losing captures in qsearch (promotions and
-        // victim>=attacker swaps exempt — SEE >= 0 by the first exchange)
-        if (in_qsearch and !in_check and move.promo == types.None and pos.board[move.to] != 0xFF and
-            see.piece_val[types.idType(pos.board[move.to])] < see.piece_val[types.idType(pos.board[move.from])] and
-            see.see(pos, move) < 0)
-            continue;
+        // SEE of a capture/promotion, computed once on the pre-move board
+        // (after make, board[to] holds the mover and board[from] is 0xFF,
+        // which idType() reads as a rook). Only the qsearch capture prunes
+        // consume it; quiets run their own call in the hanging-quiet prune.
+        const cap_see: i32 = if (in_qsearch and gain != 0) see.see(pos, move) else 0;
+
+        // SEE pruning in qsearch (promotions and EP exempt): any capture
+        // with SEE < 0; equal exchanges (SEE == 0) also go when stand-pat
+        // plus the futility margin cannot reach alpha (Cfish qsearch:
+        // futilityBase <= alpha && !see_ge(move, 1))
+        if (in_qsearch and !in_check and move.promo == types.None and gain != 0) {
+            if (cap_see < 0)
+                continue;
+            if (cap_see == 0 and static_eval + tun.get2(.qs_fut_margin) <= alpha)
+                continue;
+        }
 
         // Delta pruning
         if (in_qsearch and !in_check and static_eval + tun.get(.qs_delta) + gain < alpha)
@@ -349,21 +366,6 @@ fn alphabeta(
         if (ply > 0 and depth < tun.get(.ffp_max_depth) and !in_qsearch and !in_check and num_moves_evaluated != 0 and
             static_eval + tun.get(.ffp_margin) * depth + gain < alpha)
             break :loop;
-
-        // Capture quality for the LMR condition, computed on the pre-move
-        // board: after make, board[to] holds the mover and board[from] is
-        // 0xFF (idType(0xFF) wraps to Rook). +1 winning (first exchange not
-        // losing or SEE > 0), -1 losing (SEE < 0), 0 unclassified. The gate
-        // mirrors the LMR block so see() is only called when it will be used.
-        var lmr_cap: i32 = 0;
-        if (depth > 3 and num_moves_evaluated > 1 and gain != 0 and move.promo == types.None) {
-            if (see.piece_val[types.idType(pos.board[move.to])] >= see.piece_val[types.idType(pos.board[move.from])]) {
-                lmr_cap = 1;
-            } else {
-                const s = see.see(pos, move);
-                lmr_cap = if (s > 0) 1 else if (s < 0) -1 else 0;
-            }
-        }
 
         // Make the move on the board in place; keep the accumulator of the
         // parent ply and write the child's from it plus the feature deltas.
@@ -391,25 +393,6 @@ fn alphabeta(
             const clamped = @min(@max(hist, -2), 2);
             reduction = @max(@divTrunc(num_moves_evaluated, tun.get(.lmr_move_div)) + @divTrunc(depth, tun.get(.lmr_depth_div)) +
                 @as(i32, @intFromBool(alpha == beta - 1)) + @as(i32, @intFromBool(!improving)) - clamped, 0);
-            // Combo conditions: winning captures (first exchange not losing)
-            // search nearer full depth; losing captures and bad-continuation
-            // quiets get one extra reduction. lmr_cap was classified on the
-            // pre-move board above (see comment there).
-            if (gain != 0 and move.promo == types.None) {
-                if (lmr_cap > 0) {
-                    reduction = @max(reduction - tun.get2(.cond_mag), 0);
-                } else if (lmr_cap < 0) {
-                    reduction += tun.get2(.cond_mag);
-                }
-            } else if (gain == 0 and ply > 0 and move.promo == types.None) {
-                const ch = cont_table[stack[@intCast(ply - 1)].current_pt][stack[@intCast(ply - 1)].current.to][move.to];
-                // thresholds inside the table's +/-512 dynamic range
-                if (ch < -tun.get2(.ch_thr)) {
-                    reduction += tun.get2(.cond_mag);
-                } else if (ch > tun.get2(.ch_thr)) {
-                    reduction = @max(reduction - tun.get2(.cond_mag), 0);
-                }
-            }
         }
 
         while (num_moves_evaluated != 0) {
@@ -465,7 +448,7 @@ fn alphabeta(
                         const pto = prev.to;
                         const v: i32 = cont_table[ppt][pto][move.to];
                         const b: i32 = depth * depth;
-                        cont_table[ppt][pto][move.to] = @intCast(std.math.clamp(v + (b - @divTrunc(b * v, 512)), -16000, 16000));
+                        cont_table[ppt][pto][move.to] = @intCast(std.math.clamp(v + (b - @divTrunc(b * v, tun.get3(.ch_gravity))), -16000, 16000));
                     }
                 }
 
@@ -482,7 +465,7 @@ fn alphabeta(
                         const mv = moves_evaluated[@intCast(j3)];
                         const v: i32 = cont_table[ppt][pto][mv.to];
                         const b: i32 = depth * depth;
-                        cont_table[ppt][pto][mv.to] = @intCast(std.math.clamp(v - (b + @divTrunc(b * v, 512)), -16000, 16000));
+                        cont_table[ppt][pto][mv.to] = @intCast(std.math.clamp(v - (b + @divTrunc(b * v, tun.get3(.ch_gravity))), -16000, 16000));
                     }
                 }
                 break :loop;
