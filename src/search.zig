@@ -265,8 +265,15 @@ fn alphabeta(
                 const gain = max_material[moves[@intCast(j)].promo] + max_material[@intCast(pieceOn(pos, moves[@intCast(j)].to))];
                 const cm_bonus = @intFromBool(gain == 0 and moveEq(moves[@intCast(j)], cm_table[stm][moves[@intCast(j)].from][moves[@intCast(j)].to]));
                 const ch = if (gain == 0 and ch_on) cont_table[ch_pt][ch_to][moves[@intCast(j)].to] else 0;
+                // MVV-LVA: victim x16 dominates the attacker term (victim still
+                // decides order); with SEE-backed pruning/LMR the bad captures
+                // this drops below the killers are handled by their own channels
+                const order = if (gain != 0)
+                    gain * 16 - max_material[@intCast(pieceOn(pos, moves[@intCast(j)].from))]
+                else
+                    0;
                 move_scores[@intCast(j)] = hh_table[stm][@intFromBool(gain == 0)][moves[@intCast(j)].from][moves[@intCast(j)].to] +
-                    @as(i32, @intFromBool(gain != 0 or moveEq(moves[@intCast(j)], stack[@intCast(ply)].killer))) * 2048 + @as(i32, cm_bonus) * 1024 + gain + ch;
+                    @as(i32, @intFromBool(gain != 0 or moveEq(moves[@intCast(j)], stack[@intCast(ply)].killer))) * 2048 + @as(i32, cm_bonus) * 1024 + order + ch;
             }
         }
 
@@ -339,10 +346,15 @@ fn alphabeta(
             if (gain != 0 and move.promo == types.None) {
                 const victim = see.piece_val[types.idType(pos.board[move.to])];
                 const attacker = see.piece_val[types.idType(pos.board[move.from])];
-                if (victim >= attacker or see.see(pos, move) > 0) {
+                if (victim >= attacker) {
                     reduction = @max(reduction - 1, 0);
-                } else if (see.see(pos, move) < 0) {
-                    reduction += 1;
+                } else {
+                    const s = see.see(pos, move); // computed once
+                    if (s > 0) {
+                        reduction = @max(reduction - 1, 0);
+                    } else if (s < 0) {
+                        reduction += 1;
+                    }
                 }
             } else if (gain == 0 and ply > 0 and move.promo == types.None) {
                 const ch = cont_table[stack[@intCast(ply - 1)].current_pt][stack[@intCast(ply - 1)].current.to][move.to];
