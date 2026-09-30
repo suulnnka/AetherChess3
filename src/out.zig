@@ -18,6 +18,8 @@ pub fn flushLine() void {
 }
 
 fn posixWrite(bytes: []const u8) void {
+    if (@import("builtin").target.cpu.arch == .wasm32)
+        return; // wasm build has no stdout consumer; search output is discarded
     var off: usize = 0;
     while (off < bytes.len) {
         const n = linux.write(1, bytes.ptr + off, bytes.len - off);

@@ -19,6 +19,16 @@ pub fn allocTT(entries: u64) void {
     @memset(transposition_table, TTEntry{});
 }
 
+/// Bind a caller-owned buffer (wasm: static memory, no allocator). The
+/// entries are zeroed; probe/store work unchanged.
+pub fn bindStatic(buf: []TTEntry) void {
+    if (transposition_table.len > 0 and transposition_table.ptr != buf.ptr)
+        return; // already bound
+    transposition_table = buf;
+    @memset(buf, TTEntry{});
+    num_tt_entries = buf.len;
+}
+
 pub fn allocTTIfEmpty() void {
     if (transposition_table.len == 0)
         allocTT(num_tt_entries);

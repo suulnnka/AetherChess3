@@ -562,6 +562,12 @@ fn anyLegalMove(pos: *Position) Move {
     return if (n > 0) moves[0] else no_move;
 }
 
+/// Last iterativelyDeepen() results (wasm C-ABI getters read these; the
+/// native UCI path ignores them — it prints info lines instead).
+pub var last_score: i32 = 0;
+pub var last_depth: i32 = 0;
+pub var last_nodes: u64 = 0;
+
 pub fn iterativelyDeepen(
     pos: *Position,
     hash_history: *HistList,
@@ -585,6 +591,7 @@ pub fn iterativelyDeepen(
 
     var score: i32 = 0;
     var i: i32 = 1;
+    var completed: i32 = 0; // last depth whose aspiration search settled
     depth_loop: while (i < 128) : (i += 1) {
         if (limits.depth > 0 and i > limits.depth)
             break;
@@ -635,6 +642,9 @@ pub fn iterativelyDeepen(
             // OpenBench compliance
             if (bench_depth > 0 and i >= bench_depth and alpha < score and score < beta) {
                 total_nodes.* += nodes;
+                last_score = score;
+                last_depth = i;
+                last_nodes = nodes;
                 return if (moveEq(stack[0].move, no_move)) anyLegalMove(pos) else stack[0].move;
             }
 
@@ -643,6 +653,7 @@ pub fn iterativelyDeepen(
 
             window *%= 2;
         }
+        completed = i;
 
         // Stability adjustment: best move changed -> extend the soft budget
         if (!moveEq(stack[0].move, prev_best)) {
@@ -657,5 +668,8 @@ pub fn iterativelyDeepen(
                 break :depth_loop;
         }
     }
+    last_score = score;
+    last_depth = completed;
+    last_nodes = nodes;
     return if (moveEq(stack[0].move, no_move)) anyLegalMove(pos) else stack[0].move;
 }

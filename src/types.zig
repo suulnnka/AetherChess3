@@ -95,6 +95,8 @@ comptime {
 // Time (main.cpp:54-58) — CLOCK_MONOTONIC in ms, computed in f64 like C++
 // ---------------------------------------------------------------------------
 pub fn now() u64 {
+    if (@import("builtin").target.cpu.arch == .wasm32)
+        return 0; // freestanding wasm has no wall clock; callers use node/depth limits
     var ts: linux.timespec = undefined;
     _ = linux.clock_gettime(linux.CLOCK.MONOTONIC, &ts);
     const v = @as(f64, @floatFromInt(ts.sec)) * 1000.0 + @as(f64, @floatFromInt(ts.nsec)) / 1e6;
