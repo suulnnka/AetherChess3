@@ -38,6 +38,8 @@ PARAMS = [
     ("se_vdiv",     2, 0.25,   2,    4),
     ("mvv_scale",  16, 0.12,   8,   32),
     ("qs_fut_margin", 155, 0.12, 60, 350),
+    ("demote_coef", 21, 0.15, 5, 80),
+    ("demote_pen", 60000, 0.15, 8192, 65535),
 ]
 NAMES = [p[0] for p in PARAMS]
 DEFS = [float(p[1]) for p in PARAMS]

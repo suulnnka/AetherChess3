@@ -58,6 +58,8 @@ pub const Id2 = enum(usize) {
     se_vdiv, // SE verification depth divisor: (d-1)/se_vdiv
     mvv_scale, // MVV-LVA victim scale in ordering
     qs_fut_margin, // qsearch: SEE==0 captures pruned when static_eval + margin <= alpha
+    demote_coef, // bad-capture demotion: see < -coef*order/1024 demotes below quiets
+    demote_pen, // demotion score penalty (must exceed max capture score ~57k)
 };
 
 // Removed 2026-09-30 per the joint-SPSA verdict (docs §十一/§十二): ch_thr and
@@ -75,6 +77,10 @@ const defs2 = [_]Param{
     .{ .name = "se_vdiv", .def = 2, .lo = 2, .hi = 6 },
     .{ .name = "mvv_scale", .def = 16, .lo = 8, .hi = 32 },
     .{ .name = "qs_fut_margin", .def = 155, .lo = 60, .hi = 350 },
+    // Cfish's -69*value/1024 is on SF's capture-score scale; A3's order values
+    // run ~3.3x larger (4ku material), so the default coef is 69/3.3 = 21
+    .{ .name = "demote_coef", .def = 21, .lo = 5, .hi = 80 },
+    .{ .name = "demote_pen", .def = 60000, .lo = 8192, .hi = 65535 },
 };
 
 pub var val2 = blk: {

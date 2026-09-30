@@ -306,8 +306,17 @@ fn alphabeta(
                     gain * tun.get2(.mvv_scale) - max_material[@intCast(pieceOn(pos, moves[@intCast(j)].from))]
                 else
                     0;
-                move_scores[@intCast(j)] = hh_table[stm][@intFromBool(gain == 0)][moves[@intCast(j)].from][moves[@intCast(j)].to] +
+                var score = hh_table[stm][@intFromBool(gain == 0)][moves[@intCast(j)].from][moves[@intCast(j)].to] +
                     @as(i32, @intFromBool(gain != 0 or moveEq(moves[@intCast(j)], stack[@intCast(ply)].killer))) * 2048 + @as(i32, cm_bonus) * 1024 + order + ch;
+                // Bad-capture demotion (Cfish movepick.c:150): a capture whose
+                // SEE falls below a fraction of its ordering value is demoted
+                // below the quiets (tried last) instead of ahead of the
+                // killers. Main search only — qsearch's negative-SEE prune
+                // already removes those moves outright.
+                if (!in_qsearch and gain != 0 and
+                    see.see(pos, moves[@intCast(j)]) < -tun.get2(.demote_coef) * @divTrunc(order, 1024))
+                    score -= tun.get2(.demote_pen);
+                move_scores[@intCast(j)] = score;
             }
         }
 

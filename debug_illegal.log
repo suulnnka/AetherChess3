@@ -1,8 +1,0 @@
-FEN_SENT: rnbq1b1r/ppppkppp/4p2n/8/3PP3/5P2/PPP1Q1PP/RNB1KBNR b KQ d3 0 1
-ENGINE (plus) REPLIED: a1a1r
-REF LEGAL: ['a7a5', 'a7a6', 'b7b5', 'b7b6', 'b8a6', 'b8c6', 'c7c5', 'c7c6', 'd7d5', 'd7d6', 'd8e8', 'e6e5', 'e7d6', 'e7e8', 'e7f6', 'f7f5', 'f7f6', 'g7g5', 'g7g6', 'h6f5', 'h6g4', 'h6g8', 'h8g8']
-
-FEN_SENT: r1bqkb1r/pppppppp/n6n/P7/3P4/2P5/RP2PPPP/1NBQKBNR b Kkq d3 0 1
-ENGINE (plus) REPLIED: a1a1r
-REF LEGAL: ['a6b4', 'a6b8', 'a6c5', 'a8b8', 'b7b5', 'b7b6', 'c7c5', 'c7c6', 'd7d5', 'd7d6', 'e7e5', 'e7e6', 'f7f5', 'f7f6', 'g7g5', 'g7g6', 'h6f5', 'h6g4', 'h6g8', 'h8g8']
-

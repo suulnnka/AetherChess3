@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Joint SPSA over ALL tunable surfaces of AetherChess3 (28 params):
+"""Joint SPSA over ALL tunable surfaces of AetherChess3 (30 params):
 
   A3_SEARCH_PARAMS (15)  round-1 4ku constants   (rfp/razoring/qs_delta/ffp/
                          nmp/lmr/hist_gravity/lmp/asp)
-  A3_STACK_PARAMS  (7)  exp-series feature knobs (SEE quiets/captures,
+  A3_STACK_PARAMS  (9)  exp-series feature knobs (SEE quiets/captures,
                          conthist threshold, SE, MVV scale, LMR cond mag,
                          qs futility margin)
   A3_MAT_PARAMS    (6)   max_material P/N/B/R/Q + conthist gravity
