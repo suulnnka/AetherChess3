@@ -1,0 +1,286 @@
+/* ============================================================
+ * AetherChess 在线对弈页 —— 布局与组件样式取自 AetherWebOS
+ * (css/base.css 的主题变量 + css/appkit.css 的应用框架 +
+ * css/window.css 的窗体外观),棋盘部分移植自 webos 国际象棋应用的 2D 视图。
+ * ============================================================ */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --radius: 10px;
+  --radius-s: 8px;
+  --accent: #5b6cff;
+  --font: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+
+  /* ---- 窗体 / 页脚 / 棋盘的尺寸都从这里出 ----
+   * 页脚宽度锁成窗体同宽(见 .page-foot),才不会跟着浏览器窗口走到屏幕两边;
+   * 棋盘是固定像素的,窗体的最小尺寸也直接由它推出来(见 --win-min-*),
+   * 浏览器窗口再小棋盘也不会被裁掉。 */
+  --win-w: 620px;
+  --win-h: 640px;
+  --cell: 56px;                              /* 棋盘格距:字号/提示点全按它换算 */
+  /* 棋盘自然尺寸 + 四周留白 52 = .fit-wrap 的 padding 28 + fitBoard() 的 24 */
+  --board-w: calc(var(--cell) * 8 + 52px);
+  --board-h: var(--board-w);
+  /* 窗体最小 = 棋盘 + 窗内铬(工具栏 44 + 状态栏 26)+ 窗框(标题栏 38 + 上下边框 2) */
+  --win-min-w: calc(var(--board-w) + 2px);
+  --win-min-h: calc(var(--board-h) + 110px);
+}
+html[data-theme="light"] {
+  --bg: #eef0f4;
+  --panel: rgba(255, 255, 255, 0.78);
+  --panel-solid: #ffffff;
+  --panel-2: #f5f6f8;
+  --text: #1a2233;
+  --text-2: #66708a;
+  --border: rgba(20, 30, 60, 0.1);
+  --hover: rgba(20, 30, 60, 0.06);
+  --shadow: 0 12px 34px rgba(10, 20, 50, 0.16), 0 2px 8px rgba(10, 20, 50, 0.08);
+  --shadow-2: 0 4px 14px rgba(10, 20, 50, 0.12);
+}
+html[data-theme="dark"] {
+  --bg: #0c111e;
+  --panel: rgba(18, 24, 40, 0.74);
+  --panel-solid: #131a2a;
+  --panel-2: #1a2336;
+  --text: #eef1f8;
+  --text-2: #93a0bd;
+  --border: rgba(255, 255, 255, 0.1);
+  --hover: rgba(255, 255, 255, 0.07);
+  --shadow: 0 14px 40px rgba(0, 0, 0, 0.55), 0 2px 10px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.45);
+}
+
+html, body { height: 100%; }
+body {
+  font-family: var(--font);
+  font-size: 14px;
+  color: var(--text);
+  overflow: hidden;
+}
+button { font-family: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: 1px; }
+
+/* ============ 桌面:webos 壁纸同族的渐变底 ============ */
+.desktop {
+  height: 100%;
+  /* 居中交给子项的 margin:auto,不用 align/justify center:浏览器窗口比窗体最小
+   * 尺寸还小时,auto 外边距归零、内容从左上开始排,滚动条能够到;用 center 会把
+   * 溢出的一半甩到左上边界之外,那部分永远滚不到。 */
+  display: flex; flex-direction: column;
+  gap: 14px; padding: 22px; overflow: auto;
+  background:
+    radial-gradient(130% 100% at 50% 0%, transparent 55%, rgba(0, 0, 0, 0.22)),
+    radial-gradient(120% 90% at 50% 8%, #2b3560, #20264a 55%, #151a35);
+}
+html[data-theme="light"] .desktop {
+  background:
+    radial-gradient(130% 100% at 50% 0%, transparent 55%, rgba(90, 110, 160, 0.18)),
+    radial-gradient(120% 90% at 50% 8%, #dfe6f5, #cdd8ee 55%, #bcc9e6);
+}
+
+/* ============ 窗体(样式对齐 webos 的 .win)============ */
+.win {
+  display: flex; flex-direction: column;
+  margin: auto;                       /* 横竖都靠 auto 外边距居中(理由见 .desktop) */
+  width: min(var(--win-w), 100%);
+  min-width: var(--win-min-w);        /* 装不下棋盘就不再缩,缺口交给 .desktop 滚动 */
+  height: min(var(--win-h), 100%);
+  min-height: var(--win-min-h);
+  background: var(--panel-solid);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  animation: winIn 0.25s cubic-bezier(0.2, 0.9, 0.3, 1.1);
+}
+@keyframes winIn { from { transform: scale(0.94) translateY(14px); opacity: 0; } }
+
+.win-head {
+  flex: none; height: 38px;
+  display: flex; align-items: center; gap: 9px;
+  padding: 0 6px 0 12px;
+  background: linear-gradient(color-mix(in srgb, var(--text) 3%, transparent), transparent);
+  border-bottom: 1px solid var(--border);
+  user-select: none; -webkit-user-select: none;
+}
+.win-head .win-ico {
+  width: 21px; height: 21px; border-radius: 6px;
+  display: grid; place-items: center; flex: none; overflow: hidden;
+}
+.win-head .win-ico svg { width: 100%; height: 100%; display: block; }
+.win-head .win-title {
+  flex: 1; font-size: 13px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.wbtn {
+  width: 34px; height: 28px; border-radius: 7px;
+  display: grid; place-items: center;
+  color: var(--text-2); flex: none;
+  transition: background 0.12s, color 0.12s;
+}
+a.wbtn { color: var(--text-2); }
+.wbtn:hover { background: var(--hover); color: var(--text); text-decoration: none; }
+.wbtn svg { width: 15px; height: 15px; }
+
+.win-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.win-body > .app { flex: 1; }
+
+/* 页脚:宽度锁成窗体同宽(.win 同一套表达式),左右两项就贴在窗体的左右边缘,
+ * 不再随浏览器窗口宽度伸縮 —— 居中与 .win 一样走 margin auto。 */
+.page-foot {
+  flex: none; font-size: 12px; color: rgba(255, 255, 255, 0.55);
+  user-select: none; -webkit-user-select: none;
+  margin: 0 auto;
+  width: min(var(--win-w), 100%); min-width: var(--win-min-w);
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; row-gap: 4px;
+}
+html[data-theme="light"] .page-foot { color: rgba(30, 42, 80, 0.55); }
+.page-foot a { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+
+/* ============ 应用框架(AppKit)============ */
+.app {
+  position: relative;
+  display: flex; flex-direction: column;
+  min-height: 0; flex: 1;
+  font-size: 13.5px;
+  background: var(--panel-solid);
+  user-select: none; -webkit-user-select: none;
+}
+.app-toolbar {
+  flex: none; min-height: 44px;
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+  overflow-x: auto;
+}
+.app-toolbar .grow { flex: 1; }
+.app-body { flex: 1; min-width: 0; min-height: 0; overflow: hidden; position: relative; display: grid; place-items: center; }
+.app-status {
+  flex: none; height: 26px;
+  display: flex; align-items: center; gap: 14px;
+  padding: 0 12px;
+  border-top: 1px solid var(--border);
+  color: var(--text-2); font-size: 12px;
+  background: var(--panel-2);
+}
+.app-status .grow { flex: 1; }
+.app-status .mono { font-family: var(--mono); }
+
+/* ---- 按钮 / 下拉(同 webos .btn / .select)---- */
+.btn {
+  height: 30px; padding: 0 12px;
+  display: inline-flex; align-items: center; gap: 6px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--border);
+  background: var(--panel-solid);
+  font-size: 12.5px;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  white-space: nowrap;
+}
+.btn:hover { background: var(--hover); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+.btn:active { transform: translateY(1px); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover { background: color-mix(in srgb, var(--accent) 85%, #000); }
+.btn:disabled { opacity: 0.45; pointer-events: none; }
+.btn svg { width: 13px; height: 13px; }
+.select {
+  height: 30px; padding: 0 10px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--border);
+  background: var(--panel-solid); color: var(--text);
+  font-size: 12.5px; outline: none;
+}
+.select:focus { border-color: var(--accent); }
+.dim { color: var(--text-2); }
+
+/* ---- 难度下拉(国际象棋应用 .chess3d-level 同款)---- */
+.chess-level-wrap { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.chess-level { min-width: 84px; cursor: pointer; }
+.chess-level option { background: var(--panel-solid); color: var(--text); }
+
+/* ============ 国际象棋棋盘(2D)============ */
+/* 格色与 webos 应用一致:浅格取木色而不是近白,否则白子(象牙)落在浅格上
+ * 认不出来。固定像素布局,缩放交给外层 .fit-wrap(见 app.js 的 fitBoard)。 */
+.fit-wrap { flex: none; transform-origin: center center; padding: 14px; }
+.chess2d-board {
+  /* --cell 在 :root(棋盘尺寸与窗体最小尺寸共用一份) */
+  flex: none;
+  display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr);
+  width: calc(var(--cell) * 8); height: calc(var(--cell) * 8);
+  border-radius: 6px; overflow: hidden;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.07);
+}
+.chess2d-cell {
+  position: relative; display: grid; place-items: center;
+  border: 0; padding: 0; font: inherit; line-height: 1;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+/* 浅格取木色:白子(象牙 #f9f6ee)在近白浅格上认不出来 */
+.chess2d-cell.light { background: #d2aa6e; }
+.chess2d-cell.dark { background: #7a5233; }
+.chess2d-cell:focus-visible { outline: 2px solid #22d3ee; outline-offset: -2px; z-index: 1; }
+.chess2d-cell.sel { box-shadow: inset 0 0 0 3px #22d3ee; }
+.chess2d-cell.mv:hover, .chess2d-cell.cap:hover { filter: brightness(1.14); }
+/* 棋子:classic 赛用 SVG(造型参照 Cburnett 一套),尺寸随格子 */
+.chess2d-pc { user-select: none; pointer-events: none; filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.45)); }
+.chess2d-pc svg { display: block; width: calc(var(--cell) * 0.86); height: calc(var(--cell) * 0.86); }
+.chess2d-dot {
+  width: calc(var(--cell) * 0.26); height: calc(var(--cell) * 0.26); border-radius: 50%;
+  background: rgba(34, 197, 94, 0.85);
+}
+.chess2d-cell.cap::after {
+  content: ''; position: absolute; inset: 5%;
+  border: calc(var(--cell) * 0.085) solid rgba(239, 68, 68, 0.85);
+  border-radius: 50%; pointer-events: none;
+}
+
+/* ============ 对话框 / 吐司(webos 系统对话框与通知同族)============ */
+dialog#dlg {
+  border: 0; padding: 0; background: none;
+  /* ⚠ 顶层 *{margin:0} 把 UA 给 modal dialog 的 margin:auto 一起抹掉了。
+   * 少了它,position:fixed + inset:0 + fit-content 的弹窗会贴在视口左上角
+   * (而不是居中);宽度也得锁,UA 的 width:fit-content 会缩成文字那么窄。 */
+  margin: auto;
+  width: min(360px, calc(100vw - 40px));
+  max-width: calc(100vw - 40px);
+}
+dialog#dlg::backdrop { background: rgba(5, 9, 20, 0.38); backdrop-filter: blur(1.5px); }
+.dlg-card {
+  background: var(--panel-solid);
+  /* ⚠ 必须显式设 color:<dialog> 的 UA 默认 color:canvastext 会直接盖过 body 的
+   * var(--text);页面没声明 color-scheme 时 canvastext 解析成黑色,深色模式标题
+   * 就变成黑字深底看不见。卡片显式给色,标题(.dlg-title 无独立色)顺带继承对。 */
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 18px;
+}
+.dlg-title { font-size: 15px; font-weight: 700; margin-bottom: 10px; }
+.dlg-msg { font-size: 13px; color: var(--text-2); line-height: 1.6; }
+.dlg-foot { display: flex; justify-content: flex-end; margin-top: 16px; }
+
+#toasts {
+  position: fixed; right: 14px; bottom: 14px;
+  display: flex; flex-direction: column-reverse; gap: 8px; z-index: 1200;
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  width: min(320px, calc(100vw - 28px)); padding: 11px 12px;
+  background: var(--panel);
+  backdrop-filter: blur(24px) saturate(1.5);
+  -webkit-backdrop-filter: blur(24px) saturate(1.5);
+  border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: var(--shadow-2);
+  font-size: 12.5px;
+  animation: toastIn 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.1);
+  cursor: pointer;
+}
+@keyframes toastIn { from { transform: translateX(30px); opacity: 0; } }
+.toast.out { transition: all 0.2s; transform: translateX(40px); opacity: 0; }

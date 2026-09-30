@@ -2,7 +2,9 @@ const std = @import("std");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
+    // 不用 standardOptimizeOption 的 Debug 默认:基准/对战数字会全废,
+    // 原生一律 ReleaseFast,要调试显式 -Doptimize=Debug。
+    const optimize = b.option(std.builtin.OptimizeMode, "optimize", "optimization mode") orelse .ReleaseFast;
 
     const exe = b.addExecutable(.{
         .name = "aether3",
