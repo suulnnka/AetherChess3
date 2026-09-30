@@ -35,7 +35,11 @@ pub const Mulberry32 = struct {
     }
 };
 
-pub const blob = @embedFile("book.bin");
+// 谱库以结构化 Rice 压缩内嵌(tools/gen_book_rice.py 生成,自校验往返),
+// init() 时解码到静态缓冲——见下方 decodeBlob。
+const blob_file = @embedFile("book.bin.rice");
+var blob_buf: [32768]u8 = undefined;
+pub var blob: []const u8 = &.{};
 
 pub const FAM_NONE: u16 = 0xFFFF;
 
@@ -58,8 +62,92 @@ inline fn rd32(off: usize) u32 {
     return @as(u32, blob[off]) | (@as(u32, blob[off + 1]) << 8) | (@as(u32, blob[off + 2]) << 16) | (@as(u32, blob[off + 3]) << 24);
 }
 
+/// MSB-first 位读取器(与 gen_book_rice.py 的 BW 互为镜像;各流均为非负值)
+const BitRd = struct {
+    bytes: []const u8,
+    pos: usize = 0,
+    acc: u8 = 0,
+    nb: u4 = 0,
+    fn bit(self: *BitRd) u1 {
+        if (self.nb == 0) {
+            self.acc = self.bytes[self.pos];
+            self.pos += 1;
+            self.nb = 8;
+        }
+        self.nb -= 1;
+        return @truncate(self.acc >> @as(u3, @intCast(self.nb)));
+    }
+    fn fix(self: *BitRd, n: u8) u32 {
+        var v: u32 = 0;
+        var i: u8 = 0;
+        while (i < n) : (i += 1) v = (v << 1) | self.bit();
+        return v;
+    }
+    fn rice(self: *BitRd, k: u8) u32 {
+        var q: u32 = 0;
+        while (self.bit() == 0) q += 1;
+        return (q << @intCast(k)) | self.fix(k);
+    }
+};
+
+/// BKE1 解码(布局见 tools/gen_book_rice.py 头注释)。任何字段越界/尺寸
+/// 不符直接 @panic——内嵌产物损坏属构建期事故,不做运行时降级。
+fn decodeBlob() void {
+    const b = blob_file;
+    const raw_len = std.mem.readInt(u32, b[8..12], .little);
+    const n_nodes = std.mem.readInt(u32, b[12..16], .little);
+    const prefix_len = std.mem.readInt(u32, b[16..20], .little);
+    if (raw_len > blob_buf.len or 20 + prefix_len > b.len) @panic("book rice header");
+    @memcpy(blob_buf[0..prefix_len], b[20 .. 20 + prefix_len]);
+    var p: usize = 20 + prefix_len;
+    const cnt = b[p .. p + 64];
+    p += 64;
+    const dict_area = b[p..];
+    var dict_off: [64]u16 = undefined;
+    {
+        var acc: u16 = 0;
+        for (0..64) |f| {
+            dict_off[f] = acc;
+            acc += cnt[f];
+        }
+    }
+    p += @as(usize, dict_off[63]) + cnt[63];
+    const ks = b[p .. p + 4];
+    p += 4;
+    var lens: [6]u32 = undefined;
+    for (&lens) |*l| {
+        l.* = std.mem.readInt(u32, b[p..][0..4], .little);
+        p += 4;
+    }
+    if (p + @as(usize, lens[0]) + lens[1] + lens[2] + lens[3] + lens[4] + lens[5] != b.len) @panic("book rice size");
+    var rF = BitRd{ .bytes = b[p .. p + lens[0]] };
+    var rT = BitRd{ .bytes = b[p + lens[0] ..][0..lens[1]] };
+    var rH = BitRd{ .bytes = b[p + lens[0] + lens[1] ..][0..lens[2]] };
+    var rP = BitRd{ .bytes = b[p + lens[0] + lens[1] + lens[2] ..][0..lens[3]] };
+    var rK = BitRd{ .bytes = b[p + lens[0] + lens[1] + lens[2] + lens[3] ..][0..lens[4]] };
+    var rM = BitRd{ .bytes = b[p + lens[0] + lens[1] + lens[2] + lens[3] + lens[4] ..][0..lens[5]] };
+    var w: usize = prefix_len;
+    for (0..n_nodes) |_| {
+        const from: u8 = @intCast(rF.fix(6));
+        const to: u8 = dict_area[dict_off[from] + rT.rice(ks[0])];
+        const hf = rH.bit();
+        const flag: u8 = (@as(u8, hf) << 7) | (@as(u8, @intCast(rP.rice(ks[1]))) << 5) | @as(u8, @intCast(rK.rice(ks[2])));
+        blob_buf[w] = from;
+        blob_buf[w + 1] = to;
+        blob_buf[w + 2] = flag;
+        w += 3;
+        if (hf != 0) {
+            blob_buf[w] = @intCast(rM.rice(ks[3]));
+            w += 1;
+        }
+    }
+    if (w != raw_len) @panic("book rice decode length");
+    blob = blob_buf[0..raw_len];
+}
+
 fn init() void {
     if (inited) return;
+    if (blob.len == 0) decodeBlob();
     var off: usize = 2;
     const n = rd16(0);
     for (0..n) |i| {

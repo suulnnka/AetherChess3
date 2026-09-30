@@ -33,12 +33,15 @@ pub const INPUTS: usize = 768;
 pub const HIDDEN: usize = 64;
 pub const BUCKETS: usize = 8;
 
-const NET_MAGIC: u32 = 0x4E4E4541; // "AENN"
-const NET_VERSION_I8: u32 = 4; // FT int8 + lossless exception list
+const RICE_MAGIC: u32 = 0x31524541; // "1REA" (LER1 = rice-coded v4 net)
+const RICE_VERSION: u32 = 1;
+const RICE_BLK: usize = 256; // ft_w 分块自适应 k 的块大小
 const ARCH_M0: u32 = 0; // plain 768 feature indexing
 const ARCH_M1: u32 = 1; // horizontal king mirror (v7)
 
-const embedded_net = @embedFile("aether.nnue");
+// 网以 Golomb-Rice 压缩内嵌(tools/gen_rice.py 生成,自校验往返),
+// init() 时解压到 RAM——解码器 ~150B,换 14.9KB 产物体积。
+const embedded_net = @embedFile("aether.nnue.rice");
 
 const Net = struct {
     ft_w: [INPUTS * HIDDEN]i16, // [feature][i]
@@ -59,8 +62,35 @@ var net_ready: bool = false;
 
 const ParseError = error{ BadMagic, BadVersion, BadArch, SizeMismatch, BadException, EmptyNet };
 
+/// MSB-first 位读取器,与 tools/gen_rice.py 的 BW 写入器互为镜像
+const BitRd = struct {
+    bytes: []const u8,
+    pos: usize = 0,
+    acc: u8 = 0,
+    nb: u4 = 0,
+    fn bit(self: *BitRd) u1 {
+        if (self.nb == 0) {
+            self.acc = self.bytes[self.pos];
+            self.pos += 1;
+            self.nb = 8;
+        }
+        self.nb -= 1;
+        return @truncate(self.acc >> @as(u3, @intCast(self.nb)));
+    }
+    /// 读一个 Rice(zigzag) 值
+    fn rice(self: *BitRd, k: u8) i32 {
+        var q: u32 = 0;
+        while (self.bit() == 0) q += 1;
+        var r: u32 = 0;
+        var i: u8 = 0;
+        while (i < k) : (i += 1) r = (r << 1) | self.bit();
+        const u = (q << @intCast(k)) | r;
+        return @as(i32, @intCast(u >> 1)) ^ (-@as(i32, @intCast(u & 1)));
+    }
+};
+
 pub fn init() void {
-    parseV4(embedded_net) catch @panic("embedded net parse failed");
+    parseRice(embedded_net) catch @panic("embedded net parse failed");
     for (0..256) |a| {
         const ai: i32 = @intCast(a);
         act_lut[a] = @divTrunc(ai * ai, net.qa);
@@ -69,51 +99,71 @@ pub fn init() void {
     net_ready = true;
 }
 
-// v4 layout: u32 magic, u32 ver=4, u32 arch, u32 qa, u32 qv, u32 n_except,
-// n_except x (u32 idx, i16 val), i8 ft_w[768*64], i8 ft_b[64],
-// i16 out_w[8][128], i16 out_b[8]. Exception indices address ft_w then ft_b
-// as one array; they carry the true qa-scaled value that overflowed i8.
-fn parseV4(bytes: []const u8) ParseError!void {
+/// LER1 布局见 tools/gen_rice.py 头注释:头部 6×u32 + ft_w 分块 k 表 +
+/// 3 个全局 k + 异常表(原样)+ 4×u32 段长 + 四段 MSB-first Rice 位流。
+/// 值集与 v4 相同:ft_w/ft_b 本为 i8 + 异常覆盖,其余 i16——解码后同构校验。
+fn parseRice(bytes: []const u8) ParseError!void {
     const ft: usize = INPUTS * HIDDEN;
     if (bytes.len < 24) return error.SizeMismatch;
-    if (std.mem.readInt(u32, bytes[0..4], .little) != NET_MAGIC) return error.BadMagic;
-    if (std.mem.readInt(u32, bytes[4..8], .little) != NET_VERSION_I8) return error.BadVersion;
+    if (std.mem.readInt(u32, bytes[0..4], .little) != RICE_MAGIC) return error.BadMagic;
+    if (std.mem.readInt(u32, bytes[4..8], .little) != RICE_VERSION) return error.BadVersion;
     net.arch = std.mem.readInt(u32, bytes[8..12], .little);
     if (net.arch != ARCH_M0 and net.arch != ARCH_M1) return error.BadArch;
     net.qa = @bitCast(std.mem.readInt(u32, bytes[12..16], .little));
     net.qv = @bitCast(std.mem.readInt(u32, bytes[16..20], .little));
     const n_exc = std.mem.readInt(u32, bytes[20..24], .little);
-    const want = 24 + @as(usize, n_exc) * 6 + ft + HIDDEN + BUCKETS * (HIDDEN * 2) * 2 + BUCKETS * 2;
-    if (bytes.len != want) return error.SizeMismatch;
+    if (n_exc > ft + HIDDEN) return error.BadException;
 
-    var off: usize = 24 + @as(usize, n_exc) * 6;
-    for (&net.ft_w) |*v| {
-        v.* = @as(i8, @bitCast(bytes[off]));
-        off += 1;
-    }
-    for (&net.ft_b) |*v| {
-        v.* = @as(i8, @bitCast(bytes[off]));
-        off += 1;
-    }
-    for (&net.out_w) |*b| {
-        for (b) |*v| {
-            v.* = std.mem.readInt(i16, bytes[off..][0..2], .little);
-            off += 2;
+    var p: usize = 24;
+    const n_blk = std.mem.readInt(u32, bytes[p..][0..4], .little);
+    if (n_blk != (ft + RICE_BLK - 1) / RICE_BLK) return error.SizeMismatch;
+    p += 4;
+    const ks = bytes[p .. p + n_blk];
+    p += n_blk;
+    const k_ftb = bytes[p];
+    const k_outw = bytes[p + 1];
+    const k_outb = bytes[p + 2];
+    p += 3;
+    const exc = bytes[p .. p + @as(usize, n_exc) * 6];
+    p += @as(usize, n_exc) * 6;
+    const lens: [4]u32 = .{
+        std.mem.readInt(u32, bytes[p..][0..4], .little),
+        std.mem.readInt(u32, bytes[p + 4 ..][0..4], .little),
+        std.mem.readInt(u32, bytes[p + 8 ..][0..4], .little),
+        std.mem.readInt(u32, bytes[p + 12 ..][0..4], .little),
+    };
+    p += 16;
+    if (p + @as(usize, lens[0]) + lens[1] + lens[2] + lens[3] != bytes.len) return error.SizeMismatch;
+
+    // ft_w:一条连续位流,每 RICE_BLK 个值换一块的 k
+    var r = BitRd{ .bytes = bytes[p .. p + lens[0]] };
+    var idx: usize = 0;
+    for (ks) |k| {
+        const n = @min(RICE_BLK, ft - idx);
+        for (0..n) |_| {
+            net.ft_w[idx] = @intCast(r.rice(k));
+            idx += 1;
         }
     }
-    for (&net.out_b) |*v| {
-        v.* = std.mem.readInt(i16, bytes[off..][0..2], .little);
-        off += 2;
+    // ft_b / out_w / out_b:各段字节对齐,全局 k
+    var q = BitRd{ .bytes = bytes[p + lens[0] ..][0..lens[1]] };
+    for (&net.ft_b) |*v| v.* = @intCast(q.rice(k_ftb));
+    var o = BitRd{ .bytes = bytes[p + lens[0] + lens[1] ..][0..lens[2]] };
+    for (&net.out_w) |*b| {
+        for (b) |*v| v.* = @intCast(o.rice(k_outw));
     }
+    var ob = BitRd{ .bytes = bytes[p + lens[0] + lens[1] + lens[2] ..][0..lens[3]] };
+    for (&net.out_b) |*v| v.* = @intCast(ob.rice(k_outb));
 
-    var eo: usize = 24;
+    // 异常覆盖(i16 真值,覆盖 ft_w/ft_b 的 i8 量化)
+    var eo: usize = 0;
     for (0..n_exc) |_| {
-        const idx = std.mem.readInt(u32, bytes[eo..][0..4], .little);
-        const val = std.mem.readInt(i16, bytes[eo + 4 ..][0..2], .little);
-        if (idx < ft) {
-            net.ft_w[idx] = val;
-        } else if (idx < ft + HIDDEN) {
-            net.ft_b[idx - ft] = val;
+        const e_idx = std.mem.readInt(u32, exc[eo..][0..4], .little);
+        const val = std.mem.readInt(i16, exc[eo + 4 ..][0..2], .little);
+        if (e_idx < ft) {
+            net.ft_w[e_idx] = val;
+        } else if (e_idx < ft + HIDDEN) {
+            net.ft_b[e_idx - ft] = val;
         } else return error.BadException;
         eo += 6;
     }

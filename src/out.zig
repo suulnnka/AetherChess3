@@ -34,8 +34,30 @@ pub fn append(str: []const u8) void {
 }
 
 pub fn appendInt(v: anytype) void {
-    const out_slice = std.fmt.bufPrint(line_buf[line_len..], "{d}", .{v}) catch unreachable;
-    line_len += out_slice.len;
+    // Hand-rolled integer formatting (4ku heritage) — std.fmt.bufPrint drags
+    // ~1-2KB of formatting machinery into the wasm closure for lines that are
+    // discarded there anyway.
+    var tmp: [24]u8 = undefined;
+    var n: usize = 0;
+    var mag: u64 = 0;
+    var neg = false;
+    if (@typeInfo(@TypeOf(v)).int.signedness == .signed) {
+        if (v < 0) {
+            neg = true;
+            mag = @intCast(-@as(i64, v));
+        } else mag = @intCast(v);
+    } else mag = @intCast(v);
+    while (true) {
+        tmp[n] = @intCast('0' + mag % 10);
+        n += 1;
+        mag /= 10;
+        if (mag == 0) break;
+    }
+    if (neg) append("-");
+    while (n > 0) {
+        n -= 1;
+        append(tmp[n .. n + 1]);
+    }
 }
 
 pub fn appendMoveStr(move: Move) void {

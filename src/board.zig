@@ -119,7 +119,7 @@ pub inline fn pieceOn(pos: *const Position, sq: u8) i32 {
 }
 
 // attacker is an absolute colour index (0 White, 1 Black)
-pub inline fn isAttacked(pos: *const Position, sq: i32, attacker: usize) i32 {
+pub fn isAttacked(pos: *const Position, sq: i32, attacker: usize) i32 {
     const bb = @as(u64, 1) << @intCast(sq);
     const pawns = pos.colour[attacker] & pos.pieces[Pawn];
     const pawn_attacks = if (attacker == 1) sw(pawns) | se(pawns) else nw(pawns) | ne(pawns);
@@ -163,7 +163,7 @@ inline fn mirrorFlagsB(pos: *const Position) [2]bool {
     return .{ pos.king_sq[0] % 8 > 3, pos.king_sq[1] % 8 < 4 };
 }
 
-pub inline fn prepareMove(pos: *const Position, move: Move) MoveInfo {
+pub fn prepareMove(pos: *const Position, move: Move) MoveInfo {
     const us: usize = pos.stm;
     const to_bit = @as(u64, 1) << @as(u6, @intCast(move.to));
 
@@ -202,7 +202,7 @@ pub inline fn prepareMove(pos: *const Position, move: Move) MoveInfo {
     };
 }
 
-pub inline fn make(pos: *Position, info: MoveInfo, move: Move) Undo {
+pub fn make(pos: *Position, info: MoveInfo, move: Move) Undo {
     const from_bit = @as(u64, 1) << @as(u6, @intCast(move.from));
     const to_bit = @as(u64, 1) << @as(u6, @intCast(move.to));
     const mask = from_bit | to_bit;
@@ -303,7 +303,7 @@ pub inline fn make(pos: *Position, info: MoveInfo, move: Move) Undo {
     return undo;
 }
 
-pub inline fn unmake(pos: *Position, move: Move, undo: Undo) void {
+pub fn unmake(pos: *Position, move: Move, undo: Undo) void {
     const from_bit = @as(u64, 1) << @as(u6, @intCast(move.from));
     const to_bit = @as(u64, 1) << @as(u6, @intCast(move.to));
     const mask = from_bit | to_bit;
@@ -489,7 +489,7 @@ inline fn generatePieceMoves(
     }
 }
 
-pub inline fn movegen(pos: *const Position, movelist: *[256]Move, only_captures: bool) i32 {
+pub fn movegen(pos: *const Position, movelist: *[256]Move, only_captures: bool) i32 {
     var num_moves: i32 = 0;
     const us: usize = pos.stm;
     const them: usize = us ^ 1;

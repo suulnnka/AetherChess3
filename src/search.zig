@@ -78,6 +78,12 @@ pub const HistList = struct {
 
     pub fn push(self: *HistList, v: u64) void {
         if (self.len == self.items.len) {
+            // wasm: the caller (wasm.zig) backs this with a static buffer sized
+            // for a full game + max search depth by construction — comptime
+            // branch keeps the allocator (and its memory.grow code) out of the
+            // freestanding build entirely.
+            if (@import("builtin").target.cpu.arch == .wasm32)
+                unreachable; // static wasm buffer sized by construction
             const new_cap = if (self.items.len == 0) 64 else self.items.len * 2;
             self.items = types.page_alloc.realloc(self.items, new_cap) catch @panic("oom");
         }
@@ -592,6 +598,7 @@ pub fn iterativelyDeepen(
     var score: i32 = 0;
     var i: i32 = 1;
     var completed: i32 = 0; // last depth whose aspiration search settled
+    var prev_score: i32 = 0; // its score (reported when a later iteration aborts)
     depth_loop: while (i < 128) : (i += 1) {
         if (limits.depth > 0 and i > limits.depth)
             break;
@@ -606,8 +613,12 @@ pub fn iterativelyDeepen(
             score = alphabeta(pos, &accs, alpha, beta, i, 0, &nodes, &stack, hash_history, hh_table, true, no_move);
 
             // Hard time / node limit exceeded
-            if (stopped or now() >= hard_stop)
+            if (stopped or now() >= hard_stop) {
+                last_score = prev_score;
+                last_depth = completed;
+                last_nodes = nodes;
                 return if (moveEq(stack[0].move, no_move)) anyLegalMove(pos) else stack[0].move;
+            }
 
             // Print with every iteration normally, or when the target depth
             // has finished when benchmarking
@@ -654,6 +665,7 @@ pub fn iterativelyDeepen(
             window *%= 2;
         }
         completed = i;
+        prev_score = score;
 
         // Stability adjustment: best move changed -> extend the soft budget
         if (!moveEq(stack[0].move, prev_best)) {
