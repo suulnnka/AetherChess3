@@ -23,7 +23,7 @@ Usage:
 """
 import argparse, json, os, random, sys, time
 
-A2TOOLS = '/home/a/chess/AetherChess2/tools'
+A2TOOLS = os.environ.get('A2TOOLS', '../AetherChess2/tools')  # 对局器依赖未公开的 AetherChess2,见文件头
 sys.path.insert(0, A2TOOLS)
 import match as M  # noqa: E402
 
@@ -87,7 +87,7 @@ def load_state(path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--engine', default='/home/a/chess/AetherChess3/aether3')
+    ap.add_argument('--engine', default='./aether3')
     ap.add_argument('--state', default='/tmp/a3_spsa/state.json')
     ap.add_argument('--iters', type=int, default=500, help='total target k (resume-safe)')
     ap.add_argument('--chunk', type=int, default=20, help='summary cadence')
